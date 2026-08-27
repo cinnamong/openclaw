@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -266,6 +267,13 @@ export async function persistAgentSessionPhase(params: {
                   ? {
                       scheduledToolCallerOrigin: normalizeCronScheduledToolCallerOrigin(
                         marker.scheduledToolCallerOrigin,
+                      ),
+                    }
+                  : {}),
+                ...(normalizeCronToolsAllowExecTarget(marker.toolsAllowExecTarget)
+                  ? {
+                      toolsAllowExecTarget: normalizeCronToolsAllowExecTarget(
+                        marker.toolsAllowExecTarget,
                       ),
                     }
                   : {}),
