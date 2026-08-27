@@ -1037,7 +1037,7 @@ describe("install-cli.sh", () => {
     expect(script).toContain('ensure_pnpm "$repo_dir"');
   });
 
-  it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
+  it("uses repo pnpm 12 via Corepack when global pnpm 11 is already present", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
     const bin = join(tmp, "bin");
     const outer = join(tmp, "outer");
@@ -1048,7 +1048,7 @@ describe("install-cli.sh", () => {
     writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
-      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
+      '{\n  "packageManager": "pnpm@12.0.0+sha512.test"\n}\n',
     );
     writeFileSync(
       join(bin, "pnpm"),
@@ -1060,7 +1060,7 @@ describe("install-cli.sh", () => {
         "#!/bin/bash",
         'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
         'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else exit 1; fi',
+        '  if grep -q "pnpm@12.0.0" package.json 2>/dev/null; then echo "12.0.0"; else exit 1; fi',
         "  exit 0",
         "fi",
         "exit 1",
@@ -1085,7 +1085,7 @@ describe("install-cli.sh", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`cmd=${join(bin, "corepack")} pnpm`);
-      expect(result.stdout).toContain("run=11.2.2");
+      expect(result.stdout).toContain("run=12.0.0");
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
