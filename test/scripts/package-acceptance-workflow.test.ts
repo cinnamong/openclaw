@@ -4006,6 +4006,9 @@ describe("package artifact reuse", () => {
     expect(releaseDispatch.run).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
+    expect(releaseDispatch.env?.CANDIDATE_ARTIFACT_JSON).toBe(
+      "${{ needs.resolve_target.outputs.release_candidate_artifact_required == 'true' && needs.candidate_acquisition.outputs.candidate_artifact_json || '' }}",
+    );
     expect(pluginDocker.with).toMatchObject({
       prepublish_plugin_registry_artifact_digest:
         "${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}",
@@ -5299,6 +5302,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         releasePackageSpec: "openclaw@beta",
       },
     );
+    const conflictingPublishedRelease = runReleaseChecksInputValidation(
+      "beta",
+      "false",
+      "all",
+      "false",
+      "",
+      {
+        candidateArtifactJson: releaseCandidateArtifactJson(),
+        phase: "candidate",
+        releasePackageSpec: "openclaw@beta",
+      },
+    );
 
     expect(missing.result.status).toBe(1);
     expect(missing.result.stderr).toContain(
@@ -5306,6 +5321,33 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(publishedAcceptance.result.status, publishedAcceptance.result.stderr).toBe(0);
     expect(publishedCrossOs.result.status, publishedCrossOs.result.stderr).toBe(0);
+    expect(conflictingPublishedRelease.result.status).toBe(1);
+    expect(conflictingPublishedRelease.result.stderr).toContain(
+      "candidate_artifact_json cannot be combined with release_package_spec.",
+    );
+  });
+
+  it("uses a candidate for release lanes with a separate Package Acceptance override", () => {
+    const { outputPath, result } = runReleaseChecksInputValidation(
+      "stable",
+      "false",
+      "all",
+      "false",
+      "",
+      {
+        candidateArtifactJson: releaseCandidateArtifactJson(),
+        packageAcceptancePackageSpec: "openclaw@next",
+        phase: "candidate",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const output = readFileSync(outputPath, "utf8");
+    expect(output).toContain("package_mode=artifact\n");
+    expect(output).toContain("package_acceptance_package_spec=openclaw@next\n");
+    expect(output).toContain("cross_os_scheduled=true\n");
+    expect(output).toContain("docker_required=true\n");
+    expect(output).toContain("package_acceptance_scheduled=true\n");
   });
 
   it.each([
@@ -5449,7 +5491,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
     expect(workflow).toContain(
-      "candidate_artifact_json cannot be combined with release package specs.",
+      "candidate_artifact_json cannot be combined with release_package_spec.",
     );
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
