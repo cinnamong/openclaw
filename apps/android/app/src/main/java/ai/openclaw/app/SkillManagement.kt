@@ -128,7 +128,11 @@ internal fun parseClawHubInstallReview(
 internal fun clawHubInstallRejection(error: GatewaySession.ErrorShape): GatewayClawHubInstallRejection =
   GatewayClawHubInstallRejection(
     message = error.message.ifBlank { "The Gateway rejected this ClawHub install." },
-    warning = error.details?.clawhubWarning?.trim()?.takeIf(String::isNotEmpty),
+    warning =
+      error.details
+        ?.clawhubWarning
+        ?.trim()
+        ?.takeIf(String::isNotEmpty),
   )
 
 internal fun supportsClawHubSkillManagement(methods: Set<String>): Boolean = methods.containsAll(CLAWHUB_SKILL_GATEWAY_METHODS)

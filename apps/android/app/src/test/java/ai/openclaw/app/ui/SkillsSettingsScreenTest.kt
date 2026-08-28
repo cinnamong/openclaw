@@ -41,6 +41,7 @@ class SkillsSettingsScreenTest {
     runtimeField.set(app, runtime)
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     val viewModels = ViewModelStore().apply { put("skills", viewModel) }
+
     @Suppress("UNCHECKED_CAST")
     val state =
       NodeRuntime::class.java
