@@ -8,12 +8,19 @@ const qaApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   pluginId: "qa-lab",
   artifactBasename: "api.js",
 });
+const qaRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "qa-lab",
+  artifactBasename: "runtime-api.js",
+});
 
 afterEach(() => {
   vi.doUnmock("vitest");
   vi.doUnmock("node:fs/promises");
   vi.doUnmock("node:child_process");
   vi.doUnmock(qaApiModuleId);
+  vi.doUnmock(qaRuntimeModuleId);
+  vi.doUnmock("../../src/gateway/client.js");
   vi.doUnmock("../../scripts/e2e/lib/plugin-index-sqlite.mjs");
   vi.doUnmock("../e2e/qa-lab/runtime/otel-test-support.js");
   vi.resetModules();
@@ -24,6 +31,59 @@ function errorTree(error: unknown): unknown[] {
 }
 
 describe("QA gateway fixture error composition", () => {
+  it.each(["diagnostic", "rejection"])(
+    "stops the WebChat bus after startup fails and owner cleanup reports a %s",
+    async (mode) => {
+      const startupError = new Error("WebChat gateway startup failed");
+      const gatewayError = new Error("WebChat gateway cleanup failed");
+      const busError = new Error("WebChat bus cleanup failed");
+      const cleaned: string[] = [];
+      const bodies: Array<() => Promise<void>> = [];
+      const cleanups: Array<() => Promise<void>> = [];
+      const start = async () => {
+        throw startupError;
+      };
+      vi.doMock("vitest", () => ({
+        afterEach: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
+        describe: (_name: string, body: () => void) => body(),
+        it: (_name: string, _options: unknown, body: () => Promise<void>) => bodies.push(body),
+        expect,
+      }));
+      vi.doMock(qaApiModuleId, () => ({
+        createQaBusState: () => ({}),
+        createQaChannelTransport: () => ({}),
+        startQaBusServer: async () => ({
+          baseUrl: "http://127.0.0.1:43210",
+          stop: async () => {
+            cleaned.push("bus");
+            throw busError;
+          },
+        }),
+      }));
+      vi.doMock(qaRuntimeModuleId, () => ({
+        createQaLiveLaneGateway: () => ({
+          start,
+          stop: async () => {
+            cleaned.push("gateway");
+            if (mode === "rejection") {
+              throw gatewayError;
+            }
+            return { errors: [gatewayError] };
+          },
+        }),
+      }));
+      vi.doMock("../../src/gateway/client.js", () => ({ GatewayClient: vi.fn() }));
+
+      await import("../e2e/qa-lab/runtime/webchat-media-artifacts.e2e.test.js");
+      expect(bodies).toHaveLength(1);
+      expect(cleanups).toHaveLength(1);
+      await expect(bodies[0]!()).rejects.toBe(startupError);
+      const cleanupError: unknown = await cleanups[0]!().catch((error: unknown) => error);
+      expect(cleaned).toEqual(["gateway", "bus"]);
+      expect(errorTree(cleanupError)).toEqual(expect.arrayContaining([gatewayError, busError]));
+    },
+  );
+
   it("completes a successful body and all cleanup phases", async () => {
     const cleaned: string[] = [];
     await expect(

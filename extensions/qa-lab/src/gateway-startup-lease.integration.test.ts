@@ -112,14 +112,13 @@ async function reproduce(denyGroupSignals: boolean) {
   };
   const snapshot = () => {
     const identity = readIdentity(root);
+    const groupAlive = identity ? isQaPosixProcessGroupAlive(identity.pgid) : false;
     return {
       ...identity,
       leaderAlive: alive(identity?.leaderPid),
       descendantAlive:
-        alive(identity?.descendantPid) &&
-        (process.platform !== "linux" ||
-          (identity ? isQaPosixProcessGroupAlive(identity.pgid) : false)),
-      groupAlive: identity ? isQaPosixProcessGroupAlive(identity.pgid) : false,
+        alive(identity?.descendantPid) && (process.platform !== "linux" || groupAlive),
+      groupAlive,
     };
   };
   const releases: ReturnType<typeof snapshot>[] = [];
@@ -324,12 +323,13 @@ async function reproduce(denyGroupSignals: boolean) {
         realKill(-identity.pgid, "SIGKILL");
       }
       const deadline = Date.now() + 5_000;
-      if (identity) {
-        while (isQaPosixProcessGroupAlive(identity.pgid) && Date.now() < deadline) {
-          await sleep(25);
-        }
-      }
+      // Retain the settled observation: a later Linux probe may see no /proc
+      // members during reaping and conservatively report an unknown group alive.
       cleaned = snapshot();
+      while (cleaned.groupAlive && Date.now() < deadline) {
+        await sleep(25);
+        cleaned = snapshot();
+      }
       record("process-cleanup-verified", cleaned);
     } finally {
       try {
