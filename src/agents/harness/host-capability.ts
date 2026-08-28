@@ -36,8 +36,8 @@ import {
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
-import { createSessionNodeInvocation } from "./node-execution-authority.js";
 import { registerAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
+import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
