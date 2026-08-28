@@ -28,6 +28,7 @@ suite.define(() => {
   it("rises from the bottom with a continuous header and compact close control", async () => {
     const results: Array<{
       closeBackground: string;
+      closeBorderRadius: string;
       closeBorderWidth: string;
       closeHeight: number;
       closeWidth: number;
@@ -78,6 +79,7 @@ suite.define(() => {
         const list = element.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
         return {
           closeBackground: getComputedStyle(close).backgroundColor,
+          closeBorderRadius: getComputedStyle(close).borderRadius,
           closeBorderWidth: getComputedStyle(close).borderTopWidth,
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
@@ -145,7 +147,8 @@ suite.define(() => {
       expect(result.headerBackground).not.toBe(result.listBackground);
       expect(result.closeWidth).toBe(36);
       expect(result.closeHeight).toBe(36);
-      expect(result.closeBorderWidth).toBe("0px");
+      expect(result.closeBorderWidth).toBe("1px");
+      expect(result.closeBorderRadius).toBe("9999px");
       expect(result.closeBackground).toBe("rgba(0, 0, 0, 0)");
     }
   });

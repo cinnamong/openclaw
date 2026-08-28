@@ -136,7 +136,8 @@
   width: 36px;
   height: 36px;
   place-items: center;
-  border: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
   background: transparent;
   transition: transform 140ms var(--ease-out);
 }
