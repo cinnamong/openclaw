@@ -8,6 +8,7 @@ import { cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronStoredJob,
   CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
   CronToolsAllowProvenance,
 } from "../types.js";
 
@@ -71,6 +72,7 @@ function reconcileToolsAllowExecTarget(params: {
   const { job } = params;
   if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
     delete job.toolsAllowExecTarget;
+    delete job.toolsAllowExecTargetRequirement;
     return;
   }
   if (!params.explicitlyMutatesToolsAllow) {
@@ -80,8 +82,14 @@ function reconcileToolsAllowExecTarget(params: {
     Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.includes("exec");
   if (params.toolsAllowExecTarget && grantsExec) {
     job.toolsAllowExecTarget = structuredClone(params.toolsAllowExecTarget);
+    job.toolsAllowExecTargetRequirement = {
+      version: 1,
+      target: structuredClone(params.toolsAllowExecTarget),
+      grantIndex: job.payload.toolsAllow.indexOf("exec"),
+    } satisfies CronToolsAllowExecTargetRequirement;
   } else {
     delete job.toolsAllowExecTarget;
+    delete job.toolsAllowExecTargetRequirement;
   }
 }
 

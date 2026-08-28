@@ -19,6 +19,7 @@ import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
   normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
@@ -423,6 +424,17 @@ export function normalizeCronJobInput(
       next.toolsAllowExecTarget = execTarget;
     } else {
       delete next.toolsAllowExecTarget;
+    }
+  }
+
+  if ("toolsAllowExecTargetRequirement" in base) {
+    const requirement = normalizeCronToolsAllowExecTargetRequirement(
+      base.toolsAllowExecTargetRequirement,
+    );
+    if (requirement) {
+      next.toolsAllowExecTargetRequirement = requirement;
+    } else {
+      delete next.toolsAllowExecTargetRequirement;
     }
   }
 

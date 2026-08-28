@@ -625,6 +625,7 @@ export async function prepareCronRunContext(params: {
           }),
           scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
+          toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

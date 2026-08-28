@@ -270,7 +270,7 @@ describe("createPersistCronSessionEntry", () => {
       runSessionKey,
       createdActor: { type: "human", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "write"],
+      toolsAllow: ["image_generate", "exec", "write"],
       toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
@@ -280,6 +280,11 @@ describe("createPersistCronSessionEntry", () => {
       },
       scheduledToolCallerOrigin: { kind: "local" },
       toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 1,
+      },
       persistSessionEntry,
     });
 
@@ -296,6 +301,11 @@ describe("createPersistCronSessionEntry", () => {
       version: 1,
       host: "gateway",
       ask: "always",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 1,
     });
     expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
       version: 1,
