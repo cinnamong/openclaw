@@ -203,6 +203,74 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
+  fun stableMarkerlessPreviewCanRecoverTheCanonicalAnswer() {
+    gateway.emitTruncationMarker = false
+    listOf(false, true).forEachIndexed { index, blocks ->
+      gateway.contentAsBlocks = blocks
+      if (index == 0) refreshSelectedChat() else selectChat(FULL_MESSAGE_SECOND_CHAT)
+      viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+      awaitExpanded()
+      assertEquals(expectedRequest(), gateway.fullReads.last())
+      assertEquals(index + 1, gateway.fullReads.size)
+      composeRule.onNodeWithText("Close").performClick()
+      assertNativeReaderAbsent()
+    }
+  }
+
+  @Test
+  fun markerLikeCompleteRepliesDoNotOfferCanonicalRecovery() {
+    gateway.emitTruncationMarker = false
+    val suffix = "\n...(truncated)..."
+    val cases = listOf("short$suffix", "x".repeat(7_999) + suffix, "x".repeat(8_001) + suffix, "x".repeat(8_000) + suffix + " continued")
+    cases.forEach { text ->
+      gateway.historyTextOverride = text
+      refreshSelectedChat()
+      viewAll().assertDoesNotExist()
+      assertFalse(
+        runtime.chatMessages.value
+          .single()
+          .truncated,
+      )
+    }
+    assertTrue(gateway.fullReads.isEmpty())
+  }
+
+  @Test
+  fun stableFullResponseUsesItsOwnCapInsteadOfTheHistoryCap() =
+    runBlocking {
+      gateway.emitTruncationMarker = false
+      val response = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
+      val message = response.getValue("message").jsonObject
+      val suffix = "\n...(truncated)..."
+      for (blocks in listOf(false, true)) {
+        for (cap in listOf(8_000, 1_000_000)) {
+          val text = "x".repeat(cap) + suffix
+          val content =
+            if (blocks) {
+              JsonArray(
+                listOf(
+                  buildJsonObject {
+                    put("type", JsonPrimitive("text"))
+                    put("text", JsonPrimitive(text))
+                  },
+                ),
+              )
+            } else {
+              JsonPrimitive(text)
+            }
+          gateway.fullResponseOverride = JsonObject(response + ("message" to JsonObject(message + ("content" to content))))
+          val read = prepareCurrentRead()
+          read.execute()
+          if (cap == 8_000) {
+            assertEquals("A complete reply can literally end in the old history sentinel", text, loadedText(read.state.value))
+          } else {
+            assertTrue("A markerless retrieval capped at its requested limit must remain unavailable", read.state.value == ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.TooLarge))
+          }
+        }
+      }
+    }
+
+  @Test
   @Config(sdk = [36])
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun viewAllKeepsTheTailReachableForALargeSingleTextField() {
@@ -1170,6 +1238,7 @@ internal data class FullMessageRead(
   val sessionKey: String,
   val agentId: String,
   val messageId: String,
+  val maxChars: Int? = 1_000_000,
 )
 
 internal class FullMessageGateway : AutoCloseable {
@@ -1195,6 +1264,12 @@ internal class FullMessageGateway : AutoCloseable {
   @Volatile var historyRole = "assistant"
 
   @Volatile var historyTruncated = true
+
+  @Volatile var emitTruncationMarker = true
+
+  @Volatile var contentAsBlocks = false
+
+  @Volatile var historyTextOverride: String? = null
 
   @Volatile var historyAppendCount = 0
 
@@ -1226,7 +1301,7 @@ internal class FullMessageGateway : AutoCloseable {
 
   fun preview(session: String) = fullText(session).take(8_000) + "\n...(truncated)..."
 
-  fun historyText(session: String) = if (historyTruncated) preview(session) else fullText(session)
+  fun historyText(session: String) = historyTextOverride ?: if (historyTruncated) preview(session) else fullText(session)
 
   fun backgroundText(index: Int) = "Background message $index from another client."
 
@@ -1321,7 +1396,7 @@ internal class FullMessageGateway : AutoCloseable {
                   "messages",
                   JsonArray(
                     buildList {
-                      add(message(session, truncated = historyTruncated, role = historyRole))
+                      add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session)))
                       repeat(historyAppendCount) { index ->
                         add(
                           buildJsonObject {
@@ -1337,7 +1412,7 @@ internal class FullMessageGateway : AutoCloseable {
               }
             }
             "chat.message.get" -> {
-              fullReads += FullMessageRead(connection, session, params["agentId"]?.jsonPrimitive?.content.orEmpty(), params["messageId"]?.jsonPrimitive?.content.orEmpty())
+              fullReads += FullMessageRead(connection, session, params["agentId"]?.jsonPrimitive?.content.orEmpty(), params["messageId"]?.jsonPrimitive?.content.orEmpty(), params["maxChars"]?.jsonPrimitive?.content?.toIntOrNull())
               if (fullReadRpcError) {
                 reject("UNAVAILABLE", "Synthetic full-message request failure")
                 return
@@ -1380,14 +1455,29 @@ internal class FullMessageGateway : AutoCloseable {
     session: String,
     truncated: Boolean,
     role: String = "assistant",
+    text: String = if (truncated) preview(session) else fullText(session),
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
-    put("content", JsonPrimitive(if (truncated) preview(session) else fullText(session)))
+    put(
+      "content",
+      if (contentAsBlocks) {
+        JsonArray(
+          listOf(
+            buildJsonObject {
+              put("type", JsonPrimitive("text"))
+              put("text", JsonPrimitive(text))
+            },
+          ),
+        )
+      } else {
+        JsonPrimitive(text)
+      },
+    )
     put(
       "__openclaw",
       buildJsonObject {
         put("id", JsonPrimitive(FULL_MESSAGE_ENTRY))
-        if (truncated) {
+        if (truncated && emitTruncationMarker) {
           put("truncated", JsonPrimitive(true))
           put("reason", JsonPrimitive("display-cap"))
         }

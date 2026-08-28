@@ -1619,6 +1619,7 @@ class ChatController internal constructor(
           put("sessionKey", JsonPrimitive(snapshot.sessionKey))
           put("agentId", JsonPrimitive(snapshot.ownerAgentId))
           put("messageId", JsonPrimitive(message.entryId))
+          put("maxChars", JsonPrimitive(FULL_MESSAGE_TEXT_MAX_CHARS))
         }.toString()
       val next =
         try {
@@ -1673,7 +1674,7 @@ class ChatController internal constructor(
     ) {
       return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
     }
-    val parsed = parseMessage(obj) ?: return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
+    val parsed = parseMessage(obj, FULL_MESSAGE_TEXT_MAX_CHARS) ?: return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
     // The canonical get projection is bounded too; ok:true does not promise complete text.
     if (parsed.truncated) return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.TooLarge)
     if (parsed.content.none { it.type == "text" && !it.text.isNullOrBlank() }) {
@@ -6718,7 +6719,7 @@ class ChatController internal constructor(
     val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
-    val messages = array.mapNotNull { it.asObjectOrNull()?.let(::parseMessage) }
+    val messages = array.mapNotNull { it.asObjectOrNull()?.let { message -> parseMessage(message) } }
 
     return ChatHistory(
       sessionKey = sessionKey,
@@ -6730,17 +6731,28 @@ class ChatController internal constructor(
     )
   }
 
-  private fun parseMessage(obj: JsonObject): ChatMessage? {
+  private fun parseMessage(
+    obj: JsonObject,
+    maxChars: Int = 8_000,
+  ): ChatMessage? {
     val role = normalizeVisibleChatMessageRole(obj["role"].asStringOrNull()) ?: return null
     val metadata = obj["__openclaw"].asObjectOrNull()
+    val content = parseChatMessageContents(obj)
+    // v2026.7.1-2 retains entry IDs but signals display caps with an exact terminal suffix.
+    // Native clients can outlive their Gateway; normalize here until the minimum supported
+    // Gateway guarantees the structural marker. The retrieval cap differs from history's.
+    val legacySuffix = "\n...(truncated)..."
+    val truncated = metadata?.get("truncated")
     return ChatMessage(
       id = UUID.randomUUID().toString(),
       role = role,
-      content = parseChatMessageContents(obj),
+      content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
       entryId = metadata?.get("id").asJsonStringOrNull(),
-      truncated = metadata?.get("truncated") == JsonPrimitive(true),
+      truncated =
+        truncated == JsonPrimitive(true) ||
+          (truncated == null && content.any { it.type == "text" && it.text?.length == maxChars + legacySuffix.length && it.text.endsWith(legacySuffix) }),
       provenance = parseChatMessageProvenance(obj["provenance"]),
       transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
       senderLabel = obj["senderLabel"].asJsonStringOrNull()?.trim()?.takeIf { role == "user" && it.isNotEmpty() },
@@ -7304,6 +7316,7 @@ private enum class ChatMetadataLoadState {
 
 // Group mutations enumerate whole stores; far past any realistic session count.
 private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
+private const val FULL_MESSAGE_TEXT_MAX_CHARS = 1_000_000
 
 internal fun isCurrentHistoryLoad(
   requestedSessionKey: String,
