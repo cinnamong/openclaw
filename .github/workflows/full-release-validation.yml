@@ -594,6 +594,7 @@ jobs:
       actions: read
       contents: read
     outputs:
+      state: ${{ steps.discover.outputs.state }}
       reused: ${{ steps.discover.outputs.reused }}
       reuse_reason: ${{ steps.discover.outputs.reuse_reason }}
       request_json: ${{ steps.discover.outputs.request_json }}
@@ -646,6 +647,7 @@ jobs:
       - name: Summarize release candidate discovery
         env:
           REUSED: ${{ steps.discover.outputs.reused }}
+          STATE: ${{ steps.discover.outputs.state }}
           REUSE_REASON: ${{ steps.discover.outputs.reuse_reason }}
           REQUEST_SHA256: ${{ steps.discover.outputs.request_sha256 }}
         run: |
@@ -653,6 +655,7 @@ jobs:
             echo "## Release candidate discovery"
             echo
             echo "- Request: \`${REQUEST_SHA256}\`"
+            echo "- State: \`${STATE}\`"
             echo "- Reused: \`${REUSED}\`"
             echo "- Result: ${REUSE_REASON}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -660,7 +663,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse, candidate_discovery]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.candidate_discovery.result == 'success' && needs.candidate_discovery.outputs.reused != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.candidate_discovery.result == 'success' && needs.candidate_discovery.outputs.state == 'miss' }}
     permissions:
       actions: read
       contents: read

@@ -377,7 +377,7 @@ describe("trusted full release candidate selection", () => {
 });
 
 describe("full release candidate discovery CLI", () => {
-  it("turns exhausted transient reads into a fresh-preparation miss", () => {
+  it("marks exhausted transient reads unavailable instead of permitting preparation", () => {
     const root = tempDirs.make("full-release-candidate-discovery-");
     const bin = join(root, "bin");
     const countPath = join(root, "gh-count");
@@ -414,10 +414,11 @@ exit 1
     expect(readFileSync(outputPath, "utf8")).toContain(
       "reuse_reason=candidate discovery unavailable after bounded retries",
     );
+    expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
     expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
   });
 
-  it("turns bounded artifact inventory exhaustion into a fresh-preparation miss", () => {
+  it("marks bounded artifact inventory exhaustion unavailable instead of permitting preparation", () => {
     const root = tempDirs.make("full-release-candidate-inventory-");
     const bin = join(root, "bin");
     const countPath = join(root, "gh-count");
@@ -459,6 +460,7 @@ cat "$FAKE_GH_PAYLOAD"
     expect(readFileSync(outputPath, "utf8")).toContain(
       "reuse_reason=candidate artifact inventory exceeded the bounded scan",
     );
+    expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
     expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
   });
 });
