@@ -1,6 +1,9 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  ModelCatalogProviderOutcome,
+  ModelChoice,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
@@ -66,7 +69,7 @@ type ApiKeyProviderCapabilities = {
 };
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
+  providerOutcomes?: readonly ModelCatalogProviderOutcome[];
 };
 
 let loggedSlowModelsListCatalog = false;
@@ -594,7 +597,15 @@ export async function buildModelsListResult(
   snapshot = preparedCatalog.snapshot;
   const { catalog, defaultModel } = preparedCatalog;
   const { routeVariants, providerOutcomes } = snapshot;
-  const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
+  const outcomeProjection = providerOutcomes?.length
+    ? {
+        providerOutcomes: providerOutcomes.map(({ provider, profileId, status }) => ({
+          provider,
+          ...(profileId ? { profileId } : {}),
+          status,
+        })),
+      }
+    : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
