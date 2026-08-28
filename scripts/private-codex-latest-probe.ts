@@ -520,9 +520,16 @@ export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
             row.id === ALIAS && row.upstream === ALIAS && row.displayName === "Codex (Latest)",
         ),
     );
+    const responseRequest = {
+      model: ALIAS,
+      instructions: "Reply briefly.",
+      input: [{ role: "user", content: [{ type: "input_text", text: "Reply OK" }] }],
+      stream: true,
+      store: false,
+    };
     const rejected = await http(
       "responses",
-      JSON.stringify({ model: SENTINEL, input: "Reply OK", stream: true }),
+      JSON.stringify({ ...responseRequest, model: SENTINEL }),
     );
     report.raw_model_rejected = Number([400, 403, 404].includes(rejected.status));
     const malformed = await http("responses", "{");
@@ -536,10 +543,7 @@ export async function runPrivateCodexProbe(raw: unknown): Promise<ProbeReport> {
     ) {
       throw new Error("facade");
     }
-    const stream = await http(
-      "responses",
-      JSON.stringify({ model: ALIAS, input: "Reply OK", stream: true }),
-    );
+    const stream = await http("responses", JSON.stringify(responseRequest));
     report.alias_sse_pass = Number(
       stream.status === 200 &&
         stream.body.split(/\r?\n/u).some((line) => {

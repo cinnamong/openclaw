@@ -2,6 +2,7 @@
  * @deprecated Broad public SDK barrel. Prefer focused media-store, media-mime,
  * outbound-media, and capability runtime subpaths.
  */
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 export { isVoiceCompatibleAudio, isVoiceMessageCompatibleAudio } from "../media/audio.js";
 export { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
@@ -51,13 +52,21 @@ export {
 } from "../channels/plugins/outbound/direct-text-media.js";
 /** @deprecated Use ordered inbound facts from `channel-inbound`. */
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
-export { transcribeFirstAudio } from "../media-understanding/audio-preflight.ts";
+/** Transcribes the first audio attachment without loading the runner during plugin registration. */
+export const transcribeFirstAudio = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../media-understanding/audio-preflight.js")),
+  (runtime) => runtime.transcribeFirstAudio,
+);
 export {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../media-understanding/defaults.js";
 export { describeImageWithModel } from "../media-understanding/image-runtime.ts";
-export { resolveAutoImageModel } from "../media-understanding/runner.js";
+/** Resolves an image model through the media runner when selection is requested. */
+export const resolveAutoImageModel = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../media-understanding/runner.js")),
+  (runtime) => runtime.resolveAutoImageModel,
+);
 
 export { normalizePollDurationHours, normalizePollInput } from "../polls.js";
 export type { PollInput } from "../polls.js";

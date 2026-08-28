@@ -150,14 +150,24 @@ function mockFacade(leak?: { surface: string; value: string }) {
     if (url.endsWith("catalog")) {
       return new Response(JSON.stringify(catalog));
     }
+    if (body === "{") {
+      return new Response('{"error":{"code":"invalid_request"}}', { status: 400 });
+    }
+    const request = JSON.parse(body);
+    // The private broker requires no storage; its subscription upstream consumes
+    // explicit instructions and Responses input items, not the string shorthand.
+    if (
+      request.store !== false ||
+      typeof request.instructions !== "string" ||
+      !Array.isArray(request.input)
+    ) {
+      return new Response('{"error":{"code":"invalid_request"}}', { status: 400 });
+    }
     if (body.includes("synthetic-private-probe-selector")) {
       return new Response(
         leak?.surface === "error" ? leak.value : '{"error":{"code":"model_not_allowed"}}',
         { status: 403 },
       );
-    }
-    if (body === "{") {
-      return new Response('{"error":{"code":"invalid_request"}}', { status: 400 });
     }
     return new Response(
       leak?.surface === "sse"
@@ -215,6 +225,16 @@ describe("private alias acceptance client", () => {
       harness.requests.filter((row) => row.method === "models.list").map((row) => row.params),
     ).toEqual([{ agentId: "private-pi", preparedOnly: true, view: "configured" }]);
     expect(fetch).toHaveBeenCalledTimes(4);
+    const rejected = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body));
+    const accepted = JSON.parse(String(fetch.mock.calls[3]?.[1]?.body));
+    expect(rejected).toEqual({ ...accepted, model: "synthetic-private-probe-selector" });
+    expect(accepted).toMatchObject({
+      model: "codex-latest",
+      store: false,
+      stream: true,
+      instructions: expect.any(String),
+      input: [{ role: "user", content: [{ type: "input_text", text: "Reply OK" }] }],
+    });
     expect(Object.values(report).every((value) => typeof value === "number")).toBe(true);
   });
 

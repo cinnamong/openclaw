@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import codexPlugin from "../../extensions/codex/index.js";
 import { createAgentHarnessCatalogEvaluator } from "../../src/agents/harness/model-catalog-readiness.js";
+import type { AgentHarness } from "../../src/agents/harness/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -21,7 +25,6 @@ import {
 } from "../../src/plugins/runtime.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
-import { createCodexAppServerAgentHarness } from "./harness.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
@@ -129,7 +132,21 @@ describe("models.list native account catalog", () => {
                 },
               },
             };
-            const harness = createCodexAppServerAgentHarness({ bindingStore: {} as never });
+            const harnesses: AgentHarness[] = [];
+            codexPlugin.register(
+              createTestPluginApi({
+                id: "codex",
+                rootDir: fileURLToPath(new URL("../../extensions/codex/", import.meta.url)),
+                config,
+                pluginConfig: config.plugins?.entries?.codex?.config,
+                runtime: { config: { current: () => config } } as never,
+                registerAgentHarness: (harness) => harnesses.push(harness),
+              }),
+            );
+            const harness = harnesses.find((entry) => entry.id === "codex");
+            if (!harness) {
+              throw new Error("Codex plugin did not register its harness");
+            }
             const scope = {
               config,
               agentId: "main",

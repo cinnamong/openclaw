@@ -1,6 +1,7 @@
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import clawrouter from "../../extensions/clawrouter/index.js";
 import {
   createEmptyAgentDiscoveryStores,
   resolveModelAsync,
@@ -12,7 +13,6 @@ import {
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
-import clawrouter from "./index.js";
 
 const auth = vi.hoisted(() => ({ resolveApiKeyForProvider: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => auth);
