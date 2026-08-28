@@ -133,16 +133,12 @@
 
 .shell--mobile-nav .sidebar-issues-panel__mobile-close {
   display: inline-grid;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform 140ms var(--ease-out);
+  border: 0;
+  background: transparent;
+  transition: transform 140ms var(--ease-out);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__mobile-close:active {

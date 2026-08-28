@@ -172,10 +172,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismiss.getBoundingClientRect().width).toBeGreaterThanOrEqual(40);
     expect(dismiss.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
     expect(dismissShown.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
-    expect(close.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
-    expect(close.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
-    expect(Number.parseFloat(getComputedStyle(close).borderTopWidth)).toBeGreaterThan(0);
-    expect(getComputedStyle(close).borderRadius).toBe("9999px");
+    expect(close.getBoundingClientRect().width).toBe(36);
+    expect(close.getBoundingClientRect().height).toBe(36);
+    expect(getComputedStyle(close).borderTopWidth).toBe("0px");
+    expect(getComputedStyle(close).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(getComputedStyle(panel).backgroundColor).toBe(getComputedStyle(header).backgroundColor);
     expect(getComputedStyle(header).backgroundColor).not.toBe(
       getComputedStyle(list).backgroundColor,

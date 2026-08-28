@@ -25,9 +25,10 @@ async function setTheme(page: import("playwright").Page, theme: "dark" | "light"
 }
 
 suite.define(() => {
-  it("rises from the bottom with a continuous header and touch-sized close control", async () => {
+  it("rises from the bottom with a continuous header and compact close control", async () => {
     const results: Array<{
-      closeBorderRadius: string;
+      closeBackground: string;
+      closeBorderWidth: string;
       closeHeight: number;
       closeWidth: number;
       easing: string;
@@ -42,6 +43,7 @@ suite.define(() => {
     for (const theme of ["light", "dark"] as const) {
       const context = await suite.newBrowserContext({
         colorScheme: theme,
+        deviceScaleFactor: 1,
         locale: "en-US",
         recordVideo: artifactDir
           ? { dir: path.join(artifactDir, "video"), size: viewport }
@@ -75,7 +77,8 @@ suite.define(() => {
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
         const list = element.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
         return {
-          closeBorderRadius: getComputedStyle(close).borderRadius,
+          closeBackground: getComputedStyle(close).backgroundColor,
+          closeBorderWidth: getComputedStyle(close).borderTopWidth,
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
           duration: Number(timing.duration),
@@ -91,11 +94,44 @@ suite.define(() => {
 
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
+        const previousStyle = await page.addStyleTag({
+          content: `
+            .shell--mobile-nav .sidebar-issues-panel { background: var(--bg-elevated); }
+            .shell--mobile-nav .sidebar-issues-panel__mobile-close {
+              width: 30px;
+              height: 30px;
+              border: 0;
+              background: transparent;
+            }
+            .shell--mobile-nav .sidebar-issues-panel__list-wrap { background: transparent; }
+          `,
+        });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, `mobile-inbox-${theme}.png`),
+          path: path.join(artifactDir, `mobile-inbox-before-${theme}.png`),
         });
+        const dismissShownBefore = await page
+          .locator(".sidebar-issues-panel__dismiss-shown")
+          .evaluate((element) => ({
+            fontSize: getComputedStyle(element).fontSize,
+            height: element.getBoundingClientRect().height,
+            lineHeight: getComputedStyle(element).lineHeight,
+          }));
+        await previousStyle.evaluate((element) => element.parentNode?.removeChild(element));
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, `mobile-inbox-after-${theme}.png`),
+        });
+        const dismissShownAfter = await page
+          .locator(".sidebar-issues-panel__dismiss-shown")
+          .evaluate((element) => ({
+            fontSize: getComputedStyle(element).fontSize,
+            height: element.getBoundingClientRect().height,
+            lineHeight: getComputedStyle(element).lineHeight,
+          }));
+        expect(dismissShownAfter).toEqual(dismissShownBefore);
       }
       await suite.closeBrowserContext(context);
     }
@@ -107,9 +143,10 @@ suite.define(() => {
       expect(result.easing).toBe("cubic-bezier(0.32, 0.72, 0, 1)");
       expect(result.sheetBackground).toBe(result.headerBackground);
       expect(result.headerBackground).not.toBe(result.listBackground);
-      expect(result.closeWidth).toBeGreaterThanOrEqual(44);
-      expect(result.closeHeight).toBeGreaterThanOrEqual(44);
-      expect(result.closeBorderRadius).toBe("9999px");
+      expect(result.closeWidth).toBe(36);
+      expect(result.closeHeight).toBe(36);
+      expect(result.closeBorderWidth).toBe("0px");
+      expect(result.closeBackground).toBe("rgba(0, 0, 0, 0)");
     }
   });
 
