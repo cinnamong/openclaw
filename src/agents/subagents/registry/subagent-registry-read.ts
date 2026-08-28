@@ -34,6 +34,7 @@ import {
   getSubagentRunsSnapshotForRead,
 } from "./subagent-registry-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -162,15 +163,8 @@ export function listSubagentRunsForRequester(
 }
 
 /** Returns whether a registry entry still has a live agent run context. */
-export function isSubagentRunLive(
-  entry:
-    | (Pick<SubagentRunRecord, "runId" | "childSessionKey"> & {
-        execution: Pick<SubagentRunRecord["execution"], "endedAt">;
-      })
-    | null
-    | undefined,
-): boolean {
-  if (!entry || typeof entry.execution.endedAt === "number") {
+export function isSubagentRunLive(entry: SubagentRunReadRecord | null | undefined): boolean {
+  if (!entry || !isLiveUnendedSubagentRun(entry)) {
     return false;
   }
   const context = getAgentRunContext(entry.runId);

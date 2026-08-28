@@ -94,8 +94,9 @@ function isResolvedSessionKeyOwnedBySpawner(params: {
   if (params.key === spawnedBy) {
     return false;
   }
+  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
   // Durable navigation lineage outlives display recency and live control.
-  if (normalizeOptionalString(params.entry.parentSessionKey) === spawnedBy) {
+  if (parentSessionKey === spawnedBy) {
     return true;
   }
   const run = getLatestLiveSubagentRunByChildSessionKey(params.key, isSubagentRunLive);
@@ -107,7 +108,7 @@ function isResolvedSessionKeyOwnedBySpawner(params: {
   // reach this branch because controller authority requires a current run context.
   return liveController
     ? liveController === spawnedBy
-    : normalizeOptionalString(params.entry.spawnedBy) === spawnedBy;
+    : !parentSessionKey && normalizeOptionalString(params.entry.spawnedBy) === spawnedBy;
 }
 
 function findVisibleSessionIdMatches(params: {

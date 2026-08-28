@@ -172,9 +172,20 @@ describe("resolveSessionKeyFromResolveParams", () => {
       allowed: true,
     },
     {
+      name: "stale legacy lineage conflicting with explicit parent",
+      entry: { spawnedBy: "controller-1", parentSessionKey: "agent:main:other" },
+      allowed: false,
+    },
+    {
       name: "matching live controller without stored lineage",
       entry: {},
       run: { controller: "controller-1", contextSessionKey: canonicalKey },
+      allowed: true,
+    },
+    {
+      name: "matching live requester without an explicit controller",
+      entry: {},
+      run: { controller: "controller-1", contextSessionKey: canonicalKey, requesterOnly: true },
       allowed: true,
     },
     {
@@ -187,6 +198,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
       name: "contextless controller snapshot without stored lineage",
       entry: {},
       run: { controller: "controller-1" },
+      allowed: false,
+    },
+    {
+      name: "stale unended controller with current context",
+      entry: {},
+      run: { controller: "controller-1", contextSessionKey: canonicalKey, stale: true },
       allowed: false,
     },
     {
@@ -208,7 +225,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
       controller: string;
       contextSessionKey?: string;
       ended?: boolean;
+      requesterOnly?: boolean;
       rotateLifecycle?: boolean;
+      stale?: boolean;
     };
     allowed: boolean;
   }>)("$name", async ({ entry, run, allowed }) => {
@@ -224,9 +243,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
           runId,
           childSessionKey: canonicalKey,
           requesterSessionKey: run.controller,
-          controllerSessionKey: run.controller,
+          ...(run.requesterOnly ? {} : { controllerSessionKey: run.controller }),
           requesterDisplayKey: run.controller,
-          startedAt: now - 60_000,
+          startedAt: run.stale ? now - 3 * 60 * 60 * 1_000 : now - 60_000,
           ...(run.ended ? { endedAt: now - 30_000 } : {}),
         }),
       );
