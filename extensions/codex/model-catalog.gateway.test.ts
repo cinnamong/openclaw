@@ -1,31 +1,31 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexAppServerAgentHarness } from "../../../extensions/codex/harness.js";
-import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createAgentHarnessCatalogEvaluator } from "../../src/agents/harness/model-catalog-readiness.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import {
+  buildModelsListResult,
+  createGatewayAgentModelCatalogProjector,
+} from "../../src/gateway/server-methods/models-list-result.js";
+import {
+  listModels,
+  WITHOUT_OPENAI_ENV_AUTH,
+} from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
+import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
+import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "./models-list-result.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "./models-list-result.openai-routes.test-support.js";
-import type { GatewayRequestContext } from "./types.js";
+} from "../../src/plugins/runtime.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { createCodexAppServerAgentHarness } from "./harness.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
-  completeWithPreparedSimpleCompletionModel: vi.fn(),
+  runHostPreparedIsolatedCompletion: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   AgentHarnessPreflightError: class extends Error {},
