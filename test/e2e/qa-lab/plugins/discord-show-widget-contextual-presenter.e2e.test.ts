@@ -12,9 +12,11 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
-  startQaGatewayChild,
+  createQaGatewayChild,
+  type QaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
@@ -217,7 +219,7 @@ function findOpenWidgetButton(value: unknown): JsonRecord | undefined {
 }
 
 async function postShowWidget(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   accountId: string;
   messageChannel: string;
   messageTo: string;
@@ -240,9 +242,7 @@ async function postShowWidget(params: {
   return { status: response.status, body: (await response.json()) as JsonRecord };
 }
 
-async function connectInlineClient(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): Promise<GatewayClient> {
+async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClient> {
   let resolveConnected!: () => void;
   let rejectConnected!: (error: Error) => void;
   const connected = new Promise<void>((resolve, reject) => {
@@ -462,7 +462,9 @@ describe("Discord show_widget contextual presenter process proof", () => {
       const preloadPath = await writeDiscordFetchPreload(scratch);
       const mock = await startQaMockOpenAiServer();
       cleanups.push(() => mock.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: REPO_ROOT,
         useRepoCli: true,
         providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -481,7 +483,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
           OPENCLAW_SKIP_CHANNELS: "1",
         },
       });
-      cleanups.push(() => gateway.stop());
 
       const started = (await gateway.call("chat.send", {
         sessionKey: DISCORD_SESSION_KEY,

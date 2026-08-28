@@ -1,9 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { stopQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { QA_SUBAGENT_SELF_YIELD_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -54,7 +55,9 @@ describe("plugin subagent sessions_yield follow-up", () => {
     const mock = await startQaMockOpenAiServer();
     cleanups.push(() => mock.stop());
 
-    const gateway = await startQaGatewayChild({
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -64,7 +67,6 @@ describe("plugin subagent sessions_yield follow-up", () => {
       controlUiEnabled: false,
       mutateConfig: withFixturePlugin,
     });
-    cleanups.push(() => gateway.stop());
     await transport.waitReady({ gateway });
 
     const outboundStartIndex = state
