@@ -23,8 +23,8 @@ predicate rawConnectMember(string memberName) { memberName = ["connect", "create
 predicate relevantSourceFile(File file) {
   exists(string path |
     path = file.getRelativePath() and
-    path.regexpMatch("^(src|extensions|packages/net-policy/src)/.*\\.ts$") and
-    not path.regexpMatch(".*\\.(test|spec|test-utils|test-harness|e2e-harness)\\.ts$") and
+    path.regexpMatch("^(src|extensions|packages/net-policy/src)/.*\\.(ts|mts|js|mjs)$") and
+    not path.regexpMatch(".*\\.(test|spec|test-utils|test-harness|e2e-harness)\\.(ts|mts|js|mjs)$") and
     not path.regexpMatch(".*/test-support/.*") and
     not path.regexpMatch("^extensions/diffs/assets/.*")
   )
@@ -78,7 +78,8 @@ predicate allowedRawSocketClientCall(Expr call) {
   // substituting route uses the managed https client, not a raw socket.
   allowedOwnerScope(call, "src/secrets/egress-proxy/proxy-server.ts", "startSecretEgressProxyServer")
   or
-  allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts", "connectCodexAppServerUnixSocket")
+  allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts",
+    "connectCodexAppServerUnixSocket")
   or
   allowedOwnerScope(call, "extensions/irc/src/client.ts", "connectIrcClient")
   or
