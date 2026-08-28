@@ -458,6 +458,7 @@ export function createGatewayNodesRuntime(
       },
       {
         ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+        nodeInvokeApprovalSessionKey: params.sessionKey,
         ...(syntheticScopes ? { syntheticScopes } : {}),
         ...(stream || syntheticScopes ? { forceSyntheticClient: true } : {}),
         ...(stream ? { nodeInvokeStream: stream } : {}),

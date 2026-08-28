@@ -8,6 +8,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
 import { accumulatedStreamText, advanceAccumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import {
@@ -65,6 +66,7 @@ import {
   setChatRunError,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   cacheChatSessionSnapshot,
@@ -835,6 +837,7 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
   state.chatSessionMessageSubscriptionRequestedKey = null;
   state.chatSessionMessageSubscription = null;
+  state.chatSessionApprovalQueue = [];
   const sessions = state.sessions;
   if (!sessions?.unsubscribeMessages) {
     return;
@@ -948,6 +951,9 @@ export async function syncSelectedSessionMessageSubscription(
       shouldSubscribe && isCurrent()
         ? state.sessions.subscribeMessages(nextKey, {
             agentId: nextSubscriptionAgentId ?? undefined,
+            ...(hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+              ? { includeApprovals: true }
+              : {}),
           })
         : Promise.resolve(null);
     // Gateway subscriptions are independent canonical-key entries. Overlap the old
@@ -1011,6 +1017,15 @@ export async function syncSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
+    if (subscribed.includeApprovals) {
+      state.chatSessionApprovalQueue = projectSessionApprovalReplay(
+        subscribed.approvalReplay,
+        subscribed.key,
+        subscribed.agentId ?? undefined,
+      );
+    } else {
+      state.chatSessionApprovalQueue = [];
+    }
     clearRecoveredError();
   } catch (err) {
     if (isCurrent()) {

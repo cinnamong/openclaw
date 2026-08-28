@@ -145,6 +145,7 @@ describe("applyPluginNodeInvokePolicy", () => {
         internal: {
           syntheticClient: true,
           pluginRuntimeOwnerId: DEMO_PLUGIN_ID,
+          nodeInvokeApprovalSessionKey: "agent:main:paired",
           nodeInvokeStream: stream,
         },
       },
@@ -156,6 +157,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     const approval = await expectSinglePendingApproval(manager);
+    expect(approval.request.sessionKey).toBe("agent:main:paired");
     expect(invoke).not.toHaveBeenCalled();
     expect(manager.resolve(approval.id, "allow-once")).toBe(true);
 
@@ -173,6 +175,35 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     runtimeCurrent = false;
     expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
+  });
+
+  it("does not trust a plugin-owned invocation session without host attestation", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const reviewer = createOperatorClient("conn-owner-approval");
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([reviewer]),
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: {
+        ...createOperatorClient(),
+        internal: {
+          syntheticClient: true,
+          pluginRuntimeOwnerId: DEMO_PLUGIN_ID,
+        },
+      },
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      sessionKey: "agent:main:plugin-asserted",
+    });
+
+    const approval = await expectSinglePendingApproval(manager);
+    expect(approval.request.sessionKey).toBeNull();
+    expect(manager.resolve(approval.id, "deny")).toBe(true);
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
 
   it("classifies exact arguments before the policy handler and transport", async () => {
@@ -685,6 +716,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       nodeSession: createNodeSession(),
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
+      sessionKey: "agent:main:spoofed",
       turnSource: {
         channel: "tui",
         to: "terminal",
@@ -803,6 +835,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       nodeSession: createNodeSession(),
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
+      sessionKey: "agent:main:spoofed",
       turnSource: {
         channel: "telegram",
         to: "chat:other",

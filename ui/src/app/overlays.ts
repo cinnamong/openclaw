@@ -581,9 +581,10 @@ export function createApplicationOverlays(
         updateHoldInFlight = false;
       }
     },
-    async decideApproval(decision, approvalId) {
+    async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
-        ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
+        ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??
+          (projectedApproval?.id === approvalId ? projectedApproval : undefined))
         : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
       if (!active || promptState.execApprovalBusy || disposed) {
