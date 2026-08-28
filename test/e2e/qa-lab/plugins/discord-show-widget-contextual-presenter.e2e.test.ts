@@ -319,7 +319,9 @@ describe("Discord show_widget contextual presenter process proof", () => {
       const preloadPath = await writeDiscordFetchPreload(scratch);
       const mock = await startQaMockOpenAiServer();
       cleanups.push(() => mock.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: REPO_ROOT,
         command: {
           executablePath: process.execPath,
@@ -353,7 +355,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
           OPENCLAW_SKIP_CHANNELS: "1",
         },
       });
-      cleanups.push(() => gateway.stop());
       const media = path.join(gateway.workspaceDir, "source.pdf");
       const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
       await writeFile(media, bytes);
