@@ -181,6 +181,40 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
+  it.each([
+    { inherited: true, state: "on", checked: "true", next: false },
+    { inherited: false, state: "off", checked: "false", next: true },
+    { inherited: "auto", state: "auto", checked: "true", next: false },
+  ] as const)(
+    "preserves the inherited $state Fast Mode state",
+    async ({ inherited, state, checked, next }) => {
+      const { context } = contextWith([
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+          effectiveFastMode: inherited,
+        },
+      ]);
+      const control = new NewSessionModelControl(() => undefined);
+      control.load(context, "main", true);
+
+      await vi.waitFor(() => {
+        const toggle = renderControl(control, context).querySelector<HTMLButtonElement>(
+          "[data-chat-speed-toggle]",
+        );
+        expect(toggle?.dataset.chatSpeedState).toBe(state);
+        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
+      });
+
+      renderControl(control, context)
+        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+        ?.click();
+      expect(control.fastMode).toBe(next);
+    },
+  );
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },

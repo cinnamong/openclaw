@@ -14693,6 +14693,7 @@ public struct ModelChoice: Codable, Sendable {
     public let reasoning: Bool?
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
+    public let effectivefastmode: AnyCodable?
     public let supportstools: Bool?
     public let agentruntime: [String: AnyCodable]?
     public let apikeysupported: Bool?
@@ -14713,6 +14714,7 @@ public struct ModelChoice: Codable, Sendable {
         reasoning: Bool? = nil,
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
+        effectivefastmode: AnyCodable? = nil,
         supportstools: Bool? = nil,
         agentruntime: [String: AnyCodable]? = nil,
         apikeysupported: Bool? = nil,
@@ -14732,6 +14734,7 @@ public struct ModelChoice: Codable, Sendable {
         self.reasoning = reasoning
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
+        self.effectivefastmode = effectivefastmode
         self.supportstools = supportstools
         self.agentruntime = agentruntime
         self.apikeysupported = apikeysupported
@@ -14753,6 +14756,7 @@ public struct ModelChoice: Codable, Sendable {
         case reasoning
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
+        case effectivefastmode = "effectiveFastMode"
         case supportstools = "supportsTools"
         case agentruntime = "agentRuntime"
         case apikeysupported = "apiKeySupported"

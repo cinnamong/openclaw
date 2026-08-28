@@ -7,6 +7,7 @@ import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runt
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityResolver,
@@ -396,11 +397,18 @@ async function buildPublicModelsListEntries(params: {
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,
             });
+      const fastModeState = resolveFastModeState({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        provider: entry.provider,
+        model: entry.id,
+      });
       return {
         ...buildPublicModelProjection(publicEntry),
         ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
+        ...(fastModeState.source === "default" ? {} : { effectiveFastMode: fastModeState.mode }),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,

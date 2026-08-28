@@ -691,6 +691,8 @@ export class NewSessionModelControl {
         model: selectedTarget?.model ?? defaultTarget?.model,
         modelProvider: selectedTarget?.provider ?? defaultTarget?.provider ?? undefined,
         fastMode: this.fastMode,
+        effectiveFastMode:
+          this.fastMode ?? (selectedTarget?.entry ?? defaultTarget?.entry)?.effectiveFastMode,
       },
       modelOverrides: { [sessionKey]: this.selected },
       modelPickerTargetGroups: this.catalogTargetGroups(),
