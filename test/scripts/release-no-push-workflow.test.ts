@@ -338,7 +338,7 @@ describe("release validation no-push transport", () => {
     expect(discovery.if).toContain(
       "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
-    expect(candidate.if).toContain("needs.candidate_discovery.outputs.reused != 'true'");
+    expect(candidate.if).toContain("needs.candidate_discovery.outputs.state == 'miss'");
     expect(capture.run).toContain(
       "release_check_groups=(install-smoke cross-os package qa-parity)",
     );
