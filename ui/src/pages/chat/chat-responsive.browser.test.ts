@@ -1754,14 +1754,22 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("optically matches the effort lightning to the microphone without shrinking fast mode", async () => {
+  it("sizes the compact Fast Mode button and Context Window icon independently", async () => {
     const page = await openBrowserPage(800, 300);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
         <div class="agent-chat__input">
           <span class="chat-controls__effort-zap">${iconSvg()}</span>
           <button class="chat-send-btn chat-send-btn--voice">${iconSvg()}</button>
-          <span class="chat-controls__fast-mode-icon">${iconSvg()}</span>
+          <button class="chat-controls__fast-mode-button"><span>${iconSvg()}</span></button>
+          <div class="chat-controls__context-window-row">
+            <span class="chat-controls__context-window-icon">${iconSvg()}</span>
+            <span class="chat-controls__context-window-copy">
+              <span class="chat-controls__context-window-title">Context Window</span>
+              <span class="chat-controls__context-window-description">1M</span>
+            </span>
+            <button class="chat-controls__speed-toggle"></button>
+          </div>
         </div>
       </body></html>`);
       const sizes = await page.evaluate(() => {
@@ -1770,14 +1778,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return { height: rect.height, width: rect.width };
         };
         return {
+          context: size(".chat-controls__context-window-icon"),
           effort: size(".chat-controls__effort-zap"),
-          fast: size(".chat-controls__fast-mode-icon"),
+          fast: size(".chat-controls__fast-mode-button > span"),
           microphone: size(".chat-send-btn--voice svg"),
         };
       });
+      expect(sizes.context).toEqual({ height: 16, width: 16 });
       expect(sizes.effort).toEqual({ height: 14, width: 14 });
       expect(sizes.microphone).toEqual({ height: 16, width: 16 });
-      expect(sizes.fast).toEqual({ height: 16, width: 16 });
+      expect(sizes.fast).toEqual({ height: 18, width: 18 });
     } finally {
       await closeBrowserPage(page);
     }
@@ -2986,7 +2996,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("shows the current effort beside its heading in the accent color", async () => {
+  it("shows the selected effort as the heading in the normal text color", async () => {
     const page = await openBrowserPage(393, 852);
     try {
       await page.setContent(`
@@ -3000,7 +3010,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <span class="chat-controls__effort-value">Extra high</span>
               </div>
             </div>
-            <span data-accent-probe style="color: var(--accent)"></span>
+            <span data-text-probe style="color: var(--text)"></span>
           </body>
         </html>
       `);
@@ -3012,7 +3022,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const valueNode = document.querySelector<HTMLElement>(".chat-controls__effort-value")!;
         const value = valueNode.getBoundingClientRect();
         return {
-          accentColor: getComputedStyle(document.querySelector<HTMLElement>("[data-accent-probe]")!)
+          textColor: getComputedStyle(document.querySelector<HTMLElement>("[data-text-probe]")!)
             .color,
           heading: { right: heading.right, y: heading.y, height: heading.height },
           value: {
@@ -3030,7 +3040,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           layout.value.y + layout.value.height / 2 - (layout.heading.y + layout.heading.height / 2),
         ),
       ).toBeLessThanOrEqual(1);
-      expect(layout.value.color).toBe(layout.accentColor);
+      expect(layout.value.color).toBe(layout.textColor);
     } finally {
       await closeBrowserPage(page);
     }

@@ -89,17 +89,13 @@ export function renderContextWindowControl(
     `;
   }
   return html`
-    <div class="chat-controls__fast-mode-row chat-controls__context-window-row">
-      <span
-        class="chat-controls__fast-mode-icon chat-controls__context-window-icon"
-        aria-hidden="true"
-        >${icons.scrollText}</span
-      >
-      <span class="chat-controls__fast-mode-copy">
-        <span class="chat-controls__fast-mode-title">
+    <div class="chat-controls__context-window-row">
+      <span class="chat-controls__context-window-icon" aria-hidden="true">${icons.scrollText}</span>
+      <span class="chat-controls__context-window-copy">
+        <span class="chat-controls__context-window-title">
           ${t("chat.modelControls.contextWindow")}
         </span>
-        <span class="chat-controls__fast-mode-description">${selectedOption.label}</span>
+        <span class="chat-controls__context-window-description">${selectedOption.label}</span>
       </span>
       ${control}
     </div>

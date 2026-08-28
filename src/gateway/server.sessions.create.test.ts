@@ -2612,6 +2612,42 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
 });
 
+test("sessions.create reset-in-place applies Fast Mode only for admin callers", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-reset", { fastMode: false }) },
+  });
+  const params = {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    fastMode: true,
+  };
+
+  const denied = await directSessionReq("sessions.create", params, {
+    client: { connect: { scopes: ["operator.write"] } } as never,
+  });
+  expect(denied).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
+
+  const changed = await directSessionReq<{ entry: { fastMode?: boolean } }>(
+    "sessions.create",
+    params,
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
+  expect(changed.payload?.entry.fastMode).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ fastMode: true });
+});
+
 test("sessions.reset preserves the recorded permission boundary", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

@@ -6464,6 +6464,19 @@ describe("chat model controls", () => {
 
     const toggle = container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]");
     expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".chat-controls__context-window-row")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(container.querySelector(".chat-controls__context-window-copy")).toBeInstanceOf(
+      HTMLElement,
+    );
+    expect(
+      container.querySelector(".chat-controls__context-window-title")?.textContent?.trim(),
+    ).toBe("Context window");
+    expect(
+      container.querySelector(".chat-controls__context-window-description")?.textContent?.trim(),
+    ).toBe("1M");
+    expect(container.querySelector(".chat-controls__fast-mode-row")).toBeNull();
     expect(toggle?.getAttribute("aria-checked")).toBe("true");
     expect(toggle?.dataset.chatContextWindowToggle).toBe("200k");
     expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();

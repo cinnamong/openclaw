@@ -735,6 +735,14 @@ export async function createGatewaySession(params: {
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
         ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
+        ...(params.fastMode !== undefined
+          ? {
+              fastModeSelection: {
+                value: params.fastMode,
+                allowExistingChange: params.allowExistingModelSelection === true,
+              },
+            }
+          : {}),
         ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
         ...(params.onLifecycleCleanupError
           ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
