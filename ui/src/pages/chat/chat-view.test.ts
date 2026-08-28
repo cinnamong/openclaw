@@ -7540,9 +7540,9 @@ describe("chat model controls", () => {
     expect(effortValue).toBeInstanceOf(HTMLElement);
     expect(effortValue?.classList.contains("sr-only")).toBe(false);
     expect(getThinkingReasoningValueLabel(container)).toBe("High");
-    expect(container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim()).toBe(
-      "Fast mode",
-    );
+    expect(speedToggle?.classList.contains("chat-controls__fast-mode-button")).toBe(true);
+    expect(speedToggle?.getAttribute("aria-label")).toBe("Fast responses: Standard");
+    expect(speedToggle?.dataset.chatSpeedState).toBe("off");
     expect(speedToggle?.getAttribute("aria-checked")).toBe("false");
     expect(speedToggle?.dataset.chatSpeedToggle).toBe("on");
     expect(

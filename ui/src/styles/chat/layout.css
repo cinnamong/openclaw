@@ -6711,10 +6711,10 @@ button.chat-pr__diff {
 
 .chat-controls__effort-value {
   min-width: 0;
-  color: var(--accent);
+  color: var(--text);
   font-size: 12px;
   font-weight: 650;
-  text-align: end;
+  text-align: start;
   white-space: nowrap;
 }
 
@@ -6839,21 +6839,77 @@ button.chat-pr__diff {
   opacity: 0.35;
 }
 
-.chat-controls__fast-mode-row {
-  display: flex;
+.chat-controls__fast-mode-button {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--muted);
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 11px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  justify-content: center;
+  flex: 0 0 30px;
 }
 
-.chat-controls__fast-mode-icon {
+.chat-controls__fast-mode-button:hover:not(:disabled),
+.chat-controls__fast-mode-button:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 24%, var(--border));
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__fast-mode-button:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.chat-controls__fast-mode-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.chat-controls__fast-mode-button > span {
   display: inline-flex;
-  width: var(--chat-composer-chip-icon, 14px);
-  height: var(--chat-composer-chip-icon, 14px);
+  width: 18px;
+  height: 18px;
+}
+
+.chat-controls__fast-mode-button svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+}
+
+.chat-controls__fast-mode-button--active:not(.chat-controls__fast-mode-button--auto) {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: var(--accent-subtle);
   color: var(--accent);
-  flex: 0 0 var(--chat-composer-chip-icon, 14px);
+}
+
+.chat-controls__fast-mode-button--active:not(.chat-controls__fast-mode-button--auto) svg {
+  fill: currentColor;
+}
+
+.chat-controls__fast-mode-button--active:not(.chat-controls__fast-mode-button--auto):hover:not(
+  :disabled
+),
+.chat-controls__fast-mode-button--active:not(.chat-controls__fast-mode-button--auto):focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-hover);
+}
+
+.chat-controls__fast-mode-button--auto {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.chat-controls__reasoning-panel--fast-only .chat-controls__reasoning-head {
+  margin-bottom: 0;
 }
 
 /* The filled lightning carries more visual mass than the stroked microphone.
@@ -6885,7 +6941,6 @@ button.chat-pr__diff {
   }
 }
 
-.chat-controls__fast-mode-icon svg,
 .chat-controls__effort-zap svg {
   width: 100%;
   height: 100%;
@@ -6895,28 +6950,6 @@ button.chat-pr__diff {
 
 .chat-controls__context-window-icon svg {
   fill: none;
-}
-
-.chat-controls__fast-mode-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-controls__fast-mode-title {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.chat-controls__fast-mode-description {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-controls__context-window-options {
