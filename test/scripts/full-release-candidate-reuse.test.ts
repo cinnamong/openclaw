@@ -288,6 +288,25 @@ describe("trusted full release candidate selection", () => {
     expect(runReads).toEqual([80, 81, 82, 83, 84]);
   });
 
+  it("stops provenance reads when the discovery deadline is exhausted", async () => {
+    const { manifest, metadata } = await fixture();
+    let reads = 0;
+    await expect(
+      selectTrustedFullReleaseCandidate({
+        artifacts: [metadata],
+        deadlineMs: Date.now() - 1,
+        now: NOW,
+        readWorkflowRun: async () => {
+          reads += 1;
+          return workflowRun();
+        },
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+      }),
+    ).rejects.toThrow("candidate discovery exceeded its time budget");
+    expect(reads).toBe(0);
+  });
+
   it("skips an artifact whose trusted publisher job did not succeed", async () => {
     const { archive, manifest, metadata } = await fixture();
     const newest = artifactMetadata(archive, {
@@ -507,6 +526,35 @@ describe("full release candidate loading", () => {
         token: "test-token",
       }),
     ).resolves.toMatchObject({ producer: manifest.producer });
+  });
+
+  it("stops candidate loading when the discovery deadline is exhausted", async () => {
+    const { archive, manifest, metadata } = await fixture();
+    const selected = await selectTrustedFullReleaseCandidate({
+      artifacts: [metadata],
+      now: NOW,
+      readWorkflowRun: async () => workflowRun(),
+      readWorkflowJobs: async () => workflowJobs(manifest),
+      request: manifest.request,
+    });
+    let downloads = 0;
+    await expect(
+      loadSelectedFullReleaseCandidate({
+        deadlineMs: Date.now() - 1,
+        downloadArchive: async () => {
+          downloads += 1;
+          return { archiveBytes: archive, artifactMetadata: metadata };
+        },
+        now: NOW,
+        readArtifact: constituentArtifactReader(manifest),
+        readRunAttempt: async () => workflowRun(),
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+        selected: selected!,
+        token: "test-token",
+      }),
+    ).rejects.toThrow("candidate discovery exceeded its time budget");
+    expect(downloads).toBe(0);
   });
 
   it("rejects unavailable, expired, or changed constituent artifacts before reuse", async () => {

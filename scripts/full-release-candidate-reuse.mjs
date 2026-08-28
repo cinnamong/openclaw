@@ -29,6 +29,7 @@ const MAX_CANDIDATES_TO_EVALUATE = 5;
 const MAX_CANDIDATE_MANIFEST_BYTES = 32 * 1024;
 const MAX_ARTIFACT_PAGES = 10;
 const MIN_CANDIDATE_REMAINING_MS = 14 * 60 * 60 * 1000;
+const CANDIDATE_DISCOVERY_BUDGET_MS = 8 * 60 * 1000;
 const GH_TIMEOUT_MS = 60_000;
 const CANDIDATE_GH_TIMEOUT_MS = 20_000;
 const CANDIDATE_GH_RETRY_ATTEMPTS = 2;
@@ -40,6 +41,13 @@ function fail(message) {
 }
 
 class CandidateConstituentUnavailableError extends Error {}
+class CandidateDiscoveryBudgetError extends Error {}
+
+function requireDiscoveryBudget(deadlineMs) {
+  if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+    throw new CandidateDiscoveryBudgetError("candidate discovery exceeded its time budget");
+  }
+}
 
 function positiveInteger(value) {
   const number = Number(value);
@@ -182,6 +190,7 @@ function isMissingMetadataError(error) {
 
 export async function selectTrustedFullReleaseCandidate({
   artifacts,
+  deadlineMs,
   now = Date.now(),
   readWorkflowRun,
   readWorkflowJobs,
@@ -195,6 +204,7 @@ export async function selectTrustedFullReleaseCandidate({
   ) {
     fail("full release candidate artifact inventory is invalid");
   }
+  requireDiscoveryBudget(deadlineMs);
   const { requestSha256 } = requestContract(validatedRequest);
   const expectedName = fullReleaseCandidateArtifactName(requestSha256);
   const candidates = artifacts
@@ -205,6 +215,7 @@ export async function selectTrustedFullReleaseCandidate({
     .toSorted(newestCandidateFirst)
     .slice(0, MAX_CANDIDATES_TO_EVALUATE);
   for (const candidate of candidates) {
+    requireDiscoveryBudget(deadlineMs);
     let run;
     try {
       run = await readWorkflowRun(candidate.runId);
@@ -221,6 +232,7 @@ export async function selectTrustedFullReleaseCandidate({
     // Artifact names are unique across all attempts in one run. A successful
     // non-overwriting trusted upload proves selected-target code did not reserve it.
     let workflowJobs;
+    requireDiscoveryBudget(deadlineMs);
     try {
       workflowJobs = await readWorkflowJobs(candidate.runId);
     } catch (error) {
@@ -463,6 +475,7 @@ function validateCandidateWorkflowJobs(workflowJobs, binding) {
 }
 
 export async function loadSelectedFullReleaseCandidate({
+  deadlineMs,
   downloadArchive = downloadExactActionsArtifactArchive,
   fetchImpl,
   now = Date.now(),
@@ -482,6 +495,7 @@ export async function loadSelectedFullReleaseCandidate({
   ) {
     fail("selected full release candidate metadata is invalid");
   }
+  requireDiscoveryBudget(deadlineMs);
   const downloaded = await downloadArchive({
     expected: exactArchiveExpected(selected.artifact, validatedRequest),
     fetchImpl,
@@ -497,6 +511,7 @@ export async function loadSelectedFullReleaseCandidate({
       request: validatedRequest,
     },
   );
+  requireDiscoveryBudget(deadlineMs);
   await validateCandidateConstituentArtifacts({
     binding,
     minimumRemainingMs: MIN_CANDIDATE_REMAINING_MS,
@@ -504,8 +519,10 @@ export async function loadSelectedFullReleaseCandidate({
     readArtifact,
     unavailableAsMiss: true,
   });
+  requireDiscoveryBudget(deadlineMs);
   const run = await readRunAttempt(binding.producer.runId, binding.producer.runAttempt);
   validateProducerWorkflowRun(run, binding);
+  requireDiscoveryBudget(deadlineMs);
   validateCandidateWorkflowJobs(
     await readWorkflowJobs(binding.producer.runId, binding.producer.runAttempt),
     binding,
@@ -596,10 +613,12 @@ function runGhJson(
   repository,
   path,
   label,
-  { attempts = 3, paginate = false, timeoutMs = GH_TIMEOUT_MS } = {},
+  { attempts = 3, deadlineMs, paginate = false, timeoutMs = GH_TIMEOUT_MS } = {},
 ) {
   let lastError = new Error(`${label} failed`);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    requireDiscoveryBudget(deadlineMs);
+    const remainingMs = deadlineMs === undefined ? timeoutMs : deadlineMs - Date.now();
     const args = ["api"];
     if (paginate) {
       args.push("--paginate", "--slurp");
@@ -609,7 +628,7 @@ function runGhJson(
       encoding: "utf8",
       killSignal: "SIGKILL",
       maxBuffer: 2 * 1024 * 1024,
-      timeout: timeoutMs,
+      timeout: Math.max(1, Math.min(timeoutMs, remainingMs)),
     });
     if (result.error) {
       lastError = result.error;
@@ -629,11 +648,16 @@ function runGhJson(
     if (attempt === attempts || classifyReleaseGhTransportError(lastError) !== "transient") {
       throw lastError;
     }
+    requireDiscoveryBudget(deadlineMs);
+    const retryDelayMs =
+      deadlineMs === undefined
+        ? GH_RETRY_BASE_DELAY_MS * attempt
+        : Math.min(GH_RETRY_BASE_DELAY_MS * attempt, Math.max(0, deadlineMs - Date.now()));
     Atomics.wait(
       new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
       0,
       0,
-      GH_RETRY_BASE_DELAY_MS * attempt,
+      retryDelayMs,
     );
   }
   throw lastError;
@@ -732,8 +756,10 @@ async function discover(args) {
   output("request_json", contract.requestJson);
   output("request_sha256", contract.requestSha256);
   let selected;
+  const deadlineMs = Date.now() + CANDIDATE_DISCOVERY_BUDGET_MS;
   const ghOptions = {
     attempts: CANDIDATE_GH_RETRY_ATTEMPTS,
+    deadlineMs,
     timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
   };
   try {
@@ -749,6 +775,7 @@ async function discover(args) {
     }
     selected = await selectTrustedFullReleaseCandidate({
       artifacts,
+      deadlineMs,
       request: contract.request,
       readWorkflowRun: async (runId) =>
         runGhJson(
@@ -761,6 +788,11 @@ async function discover(args) {
         readCandidateWorkflowHistory(contract.request.repository, runId, ghOptions),
     });
   } catch (error) {
+    if (error instanceof CandidateDiscoveryBudgetError) {
+      output("reused", "false");
+      output("reuse_reason", error.message);
+      return;
+    }
     if (classifyReleaseGhTransportError(error) !== "transient") {
       throw error;
     }
@@ -776,6 +808,7 @@ async function discover(args) {
   let binding;
   try {
     binding = await loadSelectedFullReleaseCandidate({
+      deadlineMs,
       downloadArchive: (params) =>
         downloadExactActionsArtifactArchive({
           ...params,
@@ -803,7 +836,10 @@ async function discover(args) {
       token,
     });
   } catch (error) {
-    if (!(error instanceof CandidateConstituentUnavailableError)) {
+    if (
+      !(error instanceof CandidateConstituentUnavailableError) &&
+      !(error instanceof CandidateDiscoveryBudgetError)
+    ) {
       throw error;
     }
     output("reused", "false");
