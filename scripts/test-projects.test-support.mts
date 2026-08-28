@@ -2588,7 +2588,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/lib\/actions-artifact-archive\.mjs$/u,
     ["full-release-candidate-reuse", "plugin-publication-artifact"],
   ],
-  [/^scripts\/full-release-candidate-reuse\.(?:mjs|d\.mts)$/u, ["full-release-candidate-reuse"]],
+  [
+    /^scripts\/(?:lib\/)?full-release-candidate-reuse\.(?:mjs|d\.mts)$/u,
+    ["full-release-candidate-reuse"],
+  ],
   [
     /^scripts\/lib\/static-extension-assets\.(?:mjs|mts)$/u,
     ["bundled-plugin-assets", "runtime-postbuild", runNode, "plugin-npm-runtime-build-args"],

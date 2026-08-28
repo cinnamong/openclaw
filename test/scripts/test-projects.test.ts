@@ -673,6 +673,13 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each([
+    "scripts/lib/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-candidate-reuse.d.mts",
+  ])("routes candidate reuse library changes through the owner test for %s", (changedPath) => {
+    expectChangedTargets([changedPath], ["test/scripts/full-release-candidate-reuse.test.ts"]);
+  });
+
   it("unions semantic workflow owners with bounded direct references", () => {
     withTinyGitRepo(
       {

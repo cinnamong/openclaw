@@ -5,14 +5,14 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
+import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   candidateArtifactJsonFromBinding,
   loadSelectedFullReleaseCandidate,
   resolveCandidateBinding,
   selectTrustedFullReleaseCandidate,
   verifySealedFullReleaseCandidate,
-} from "../../scripts/full-release-candidate-reuse.mjs";
-import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
+} from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import {
   canonicalTestJson,
   fullReleaseCandidateBindingFixture,

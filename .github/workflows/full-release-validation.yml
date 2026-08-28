@@ -611,6 +611,7 @@ jobs:
             scripts/full-release-validation-policy.mjs
             scripts/lib/actions-artifact-archive.mjs
             scripts/lib/canonical-json.mjs
+            scripts/lib/full-release-candidate-reuse.mjs
             scripts/lib/record-shared.mjs
             scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
@@ -709,6 +710,7 @@ jobs:
             scripts/full-release-validation-policy.mjs
             scripts/lib/actions-artifact-archive.mjs
             scripts/lib/canonical-json.mjs
+            scripts/lib/full-release-candidate-reuse.mjs
             scripts/lib/record-shared.mjs
             scripts/lib/upgrade-survivor-policy.mjs
           sparse-checkout-cone-mode: false
@@ -1588,6 +1590,7 @@ jobs:
             scripts/release-ci-summary.mjs
             scripts/lib/actions-artifact-archive.mjs
             scripts/lib/canonical-json.mjs
+            scripts/lib/full-release-candidate-reuse.mjs
             scripts/lib/plain-gh.mjs
             scripts/lib/record-shared.mjs
             scripts/lib/upgrade-survivor-policy.mjs

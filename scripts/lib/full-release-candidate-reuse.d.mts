@@ -1,7 +1,11 @@
 import type {
   FullReleaseCandidateBinding,
   FullReleaseCandidateRequest,
-} from "./full-release-candidate-contract.mjs";
+} from "../full-release-candidate-contract.mjs";
+
+export class CandidateConstituentUnavailableError extends Error {}
+export class CandidateDiscoveryBudgetError extends Error {}
+export class CandidateEvaluationLimitError extends Error {}
 
 export interface SelectedFullReleaseCandidate {
   artifact: Record<string, unknown>;

@@ -3914,6 +3914,13 @@ describe("package artifact reuse", () => {
     const prepare = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_release_candidate");
     const discovery = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_discovery");
     const candidateBinding = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_binding");
+    const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const candidateLibrary = "scripts/lib/full-release-candidate-reuse.mjs";
+    const candidateToolingCheckouts = [
+      workflowStep(discovery, "Checkout trusted candidate discovery"),
+      workflowStep(candidateBinding, "Checkout candidate binding authority"),
+      workflowStep(summary, "Checkout release state verifier"),
+    ];
     const producer = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     const binder = workflowJob(LIVE_E2E_WORKFLOW, "bind_full_release_candidate_evidence");
     const producerIdentity = workflowStepById(producer, "producer_identity");
@@ -3935,6 +3942,9 @@ describe("package artifact reuse", () => {
 
     expect(discovery.if).toContain("github.run_attempt == 1");
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
+    for (const checkout of candidateToolingCheckouts) {
+      expect(checkout.with?.["sparse-checkout"]).toContain(candidateLibrary);
+    }
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
     );
