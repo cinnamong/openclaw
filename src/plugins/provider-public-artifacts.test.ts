@@ -6,6 +6,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
   listTrustedExternalProviderPolicyOwners,
@@ -597,7 +598,7 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
+  it("keeps manifest-owned provider policy aliases stable until a new operation", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),
     );
@@ -642,20 +643,18 @@ describe("provider public artifacts", () => {
         typeof import("./provider-public-artifacts.js")
       >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-refresh");
 
-      expect(
+      const owner = createPluginCache();
+      const levels = () =>
         resolvePolicySurface("fixture-provider")
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
-          ?.levels.map((level) => level.id),
-      ).toEqual(["first"]);
+          ?.levels.map((level) => level.id);
+      expect(withPluginCache(owner, levels)).toEqual(["first"]);
 
       writePlugin("first", [], 2);
       writePlugin("second", ["fixture-provider"], 2);
 
-      expect(
-        resolvePolicySurface("fixture-provider")
-          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
-          ?.levels.map((level) => level.id),
-      ).toEqual(["second"]);
+      expect(withPluginCache(owner, levels)).toEqual(["first"]);
+      expect(withPluginCache(createPluginCache(), levels)).toEqual(["second"]);
     } finally {
       fs.rmSync(bundledPluginsDir, { force: true, recursive: true });
     }
