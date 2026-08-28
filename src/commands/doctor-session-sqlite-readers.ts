@@ -23,6 +23,8 @@ import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-h
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
 
+export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: string };
+
 export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
   transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
@@ -487,17 +489,15 @@ export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
 }
 
 /**
- * Enumerates existing per-agent session SQLite databases for a Doctor repair.
- * Deduplicates by resolved path (aliases collapse to one target) and skips
- * databases that do not yet exist on disk. Shared by every session-row repair
- * so target enumeration cannot drift between repair surfaces.
+ * Projects each caller's ordered targets onto existing physical databases.
+ * Keep target selection with the caller: canonical repair selects owners,
+ * while ordinary row repairs enumerate candidates. First physical path wins.
  */
-export function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+export function projectExistingAgentDatabaseTargets(
+  targets: readonly SessionStoreTarget[],
+): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
+  return targets.flatMap((target) => {
     const sqlitePath = resolveTargetSqlitePath(target);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];
@@ -505,6 +505,15 @@ export function listExistingAgentDatabaseTargets(
     seenPaths.add(sqlitePath);
     return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
   });
+}
+
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ExistingAgentDatabaseTarget[] {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
+  );
 }
 
 function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
