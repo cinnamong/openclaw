@@ -9,7 +9,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
@@ -22,7 +22,7 @@ const loadProviderAuthRef = createLazyRuntimeModule(() => import("./provider-aut
 
 /** Keeps secret resolution out of synchronous provider setup metadata imports. */
 export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
-  createLazyRuntimeMethod(loadProviderAuthRef, (runtime) => runtime.promptSecretRefForSetup);
+  async (...args) => (await loadProviderAuthRef()).promptSecretRefForSetup(...args);
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 

@@ -2,7 +2,12 @@
  * @deprecated Broad public SDK barrel. Prefer focused media-store, media-mime,
  * outbound-media, and capability runtime subpaths.
  */
-import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+
+const loadAudioPreflight = createLazyRuntimeModule(
+  () => import("../media-understanding/audio-preflight.js"),
+);
+const loadMediaRunner = createLazyRuntimeModule(() => import("../media-understanding/runner.js"));
 
 export { isVoiceCompatibleAudio, isVoiceMessageCompatibleAudio } from "../media/audio.js";
 export { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
@@ -53,20 +58,16 @@ export {
 /** @deprecated Use ordered inbound facts from `channel-inbound`. */
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 /** Transcribes the first audio attachment without loading the runner during plugin registration. */
-export const transcribeFirstAudio = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("../media-understanding/audio-preflight.js")),
-  (runtime) => runtime.transcribeFirstAudio,
-);
+export const transcribeFirstAudio: typeof import("../media-understanding/audio-preflight.js").transcribeFirstAudio =
+  async (...args) => (await loadAudioPreflight()).transcribeFirstAudio(...args);
 export {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../media-understanding/defaults.js";
 export { describeImageWithModel } from "../media-understanding/image-runtime.ts";
 /** Resolves an image model through the media runner when selection is requested. */
-export const resolveAutoImageModel = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("../media-understanding/runner.js")),
-  (runtime) => runtime.resolveAutoImageModel,
-);
+export const resolveAutoImageModel: typeof import("../media-understanding/runner.js").resolveAutoImageModel =
+  async (...args) => (await loadMediaRunner()).resolveAutoImageModel(...args);
 
 export { normalizePollDurationHours, normalizePollInput } from "../polls.js";
 export type { PollInput } from "../polls.js";
