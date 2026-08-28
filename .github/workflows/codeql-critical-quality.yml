@@ -499,7 +499,7 @@ jobs:
           CODEQL_PATH: ${{ steps.init-network-codeql.outputs.codeql-path }}
         run: |
           set -euo pipefail
-          "$CODEQL_PATH" test run .github/codeql/openclaw-boundary/tests/network-runtime
+          "$CODEQL_PATH" test run --show-extractor-output .github/codeql/openclaw-boundary/tests/network-runtime
 
       - name: Analyze
         id: analyze
