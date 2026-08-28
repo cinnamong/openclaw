@@ -11,6 +11,7 @@ import {
   selectTrustedFullReleaseCandidate,
   verifySealedFullReleaseCandidate,
 } from "../../scripts/full-release-candidate-reuse.mjs";
+import { downloadExactActionsArtifactArchive } from "../../scripts/lib/actions-artifact-archive.mjs";
 import {
   canonicalTestJson,
   fullReleaseCandidateBindingFixture,
@@ -459,6 +460,33 @@ cat "$FAKE_GH_PAYLOAD"
       "reuse_reason=candidate artifact inventory exceeded the bounded scan",
     );
     expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
+  });
+});
+
+describe("candidate archive deadline", () => {
+  it("does not start artifact metadata reads after the absolute deadline", async () => {
+    let reads = 0;
+    await expect(
+      downloadExactActionsArtifactArchive({
+        deadlineMs: Date.now() - 1,
+        expected: {
+          artifactDigest: `sha256:${"a".repeat(64)}`,
+          artifactExpiresAt: EXPIRES_AT,
+          artifactId: 301,
+          artifactName: `full-release-candidate-v1-${"b".repeat(64)}`,
+          artifactSizeBytes: 1,
+          repository: REPOSITORY,
+          runId: 77,
+          workflowSha: "b".repeat(40),
+        },
+        fetchImpl: async () => {
+          reads += 1;
+          return new Response();
+        },
+        token: "test-token",
+      }),
+    ).rejects.toThrow("deadline exceeded");
+    expect(reads).toBe(0);
   });
 });
 

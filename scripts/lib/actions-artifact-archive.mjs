@@ -845,15 +845,22 @@ async function readBoundedResponseBody(response, params) {
 async function runBoundedRetry(label, operation, params) {
   let lastError;
   for (let attempt = 1; attempt <= params.attempts; attempt += 1) {
+    const remainingMs =
+      params.deadlineMs === undefined ? undefined : params.deadlineMs - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      throw new Error(`${label} deadline exceeded.`);
+    }
     try {
-      return await operation(attempt);
+      return await operation(attempt, remainingMs);
     } catch (error) {
       lastError = error;
       if (attempt === params.attempts) {
         break;
       }
+      const delayMs =
+        remainingMs === undefined ? params.delayMs : Math.min(params.delayMs, remainingMs);
       await new Promise((resolvePromise) => {
-        setTimeout(resolvePromise, params.delayMs);
+        setTimeout(resolvePromise, delayMs);
       });
     }
   }
@@ -911,6 +918,10 @@ export async function downloadExactActionsArtifactArchive(params) {
   const workflowSha = assertCommitSha(expected.workflowSha, "workflow SHA");
   const token = assertTrimmedString(params.token, "GitHub token");
   const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
+  const deadlineMs = params.deadlineMs;
+  if (deadlineMs !== undefined && (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0)) {
+    throw new Error("GitHub request deadline must be a positive integer.");
+  }
   const retryAttempts =
     params.retryAttempts === undefined
       ? 3
@@ -936,14 +947,21 @@ export async function downloadExactActionsArtifactArchive(params) {
   };
   const apiRoot = `https://api.github.com/repos/${repository}`;
   const request = { fetchImpl, headers, timeoutMs };
-  const retry = { attempts: retryAttempts, delayMs: retryDelayMs };
+  const retry = { attempts: retryAttempts, deadlineMs, delayMs: retryDelayMs };
   const artifactMetadata = await runBoundedRetry(
     "GitHub Actions artifact metadata",
-    () =>
-      fetchBoundedJson(`${apiRoot}/actions/artifacts/${artifactId}`, request, {
-        label: "GitHub Actions artifact metadata",
-        maxBytes: DEFAULT_MAX_JSON_BYTES,
-      }),
+    (_attempt, remainingMs) =>
+      fetchBoundedJson(
+        `${apiRoot}/actions/artifacts/${artifactId}`,
+        {
+          ...request,
+          timeoutMs: Math.min(timeoutMs, remainingMs ?? timeoutMs),
+        },
+        {
+          label: "GitHub Actions artifact metadata",
+          maxBytes: DEFAULT_MAX_JSON_BYTES,
+        },
+      ),
     retry,
   );
   if (
@@ -960,11 +978,11 @@ export async function downloadExactActionsArtifactArchive(params) {
   }
   const archiveBytes = await runBoundedRetry(
     "GitHub Actions artifact download",
-    async () => {
+    async (_attempt, remainingMs) => {
       const response = await fetchImpl(`${apiRoot}/actions/artifacts/${artifactId}/zip`, {
         headers,
         redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(Math.min(timeoutMs, remainingMs ?? timeoutMs)),
       });
       const bytes = await readBoundedResponseBody(response, {
         expectedBytes: artifactSizeBytes,

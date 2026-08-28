@@ -496,12 +496,23 @@ export async function loadSelectedFullReleaseCandidate({
     fail("selected full release candidate metadata is invalid");
   }
   requireDiscoveryBudget(deadlineMs);
-  const downloaded = await downloadArchive({
-    expected: exactArchiveExpected(selected.artifact, validatedRequest),
-    fetchImpl,
-    maxArchiveBytes: MAX_CANDIDATE_ARCHIVE_BYTES,
-    token,
-  });
+  let downloaded;
+  try {
+    downloaded = await downloadArchive({
+      deadlineMs,
+      expected: exactArchiveExpected(selected.artifact, validatedRequest),
+      fetchImpl,
+      maxArchiveBytes: MAX_CANDIDATE_ARCHIVE_BYTES,
+      token,
+    });
+  } catch (error) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      throw new CandidateDiscoveryBudgetError("candidate discovery exceeded its time budget", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   const manifestBytes = manifestFiles(downloaded.archiveBytes).get(CANDIDATE_MANIFEST_FILE);
   const binding = validateCandidateBinding(
     bindingFromArchive(manifestBytes, downloaded.artifactMetadata),
@@ -812,6 +823,7 @@ async function discover(args) {
       downloadArchive: (params) =>
         downloadExactActionsArtifactArchive({
           ...params,
+          deadlineMs,
           retryAttempts: CANDIDATE_GH_RETRY_ATTEMPTS,
           timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
         }),
