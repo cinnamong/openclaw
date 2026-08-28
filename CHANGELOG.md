@@ -69,6 +69,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent handoff guidance:** name agent chat without terminal-only wording and give web and terminal users the correct way back to OpenClaw after setup or a direct handoff.
+
 - MCP Apps: let standalone operations finish across catalog refreshes within per-request server budgets, propagate App cancellation without cancelling shared catalog work, and reload restored history views without replaying interrupted operations. Thanks @tzy-17. (#119388)
 
 - **Control UI command palette:** keep keyboard selection and Enter usable when reconnects or catalog refreshes replace search results, preserving the selected command while it remains available.
