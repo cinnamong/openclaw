@@ -2,7 +2,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { stopQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
@@ -84,7 +83,7 @@ async function startHookAccountFixture() {
       },
     });
   } catch (error) {
-    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
+    await gatewayOwner.stop().catch(() => undefined);
     await mock?.stop().catch(() => undefined);
     await lab.stop().catch(() => undefined);
     throw error;
@@ -97,7 +96,7 @@ async function startHookAccountFixture() {
     gateway,
     lab,
     stop: async () => {
-      await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
+      await gatewayOwner.stop().catch(() => undefined);
       await mock.stop().catch(() => undefined);
       await lab.stop().catch(() => undefined);
     },

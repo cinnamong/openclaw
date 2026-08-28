@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { stopQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
@@ -56,7 +55,9 @@ describe("plugin subagent sessions_yield follow-up", () => {
     cleanups.push(() => mock.stop());
 
     const gatewayOwner = createQaGatewayChild();
-    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    cleanups.push(async () => {
+      expect((await gatewayOwner.stop()).errors).toEqual([]);
+    });
     const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
       useRepoCli: true,

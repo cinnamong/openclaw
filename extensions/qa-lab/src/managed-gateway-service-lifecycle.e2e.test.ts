@@ -1,7 +1,6 @@
 // QA Lab owns the real child/provider fixture used by the managed service proof.
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stopQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 
@@ -55,7 +54,7 @@ describe("managed gateway service lifecycle product proof", () => {
         proofFailure = error instanceof Error ? error : new Error(String(error));
       }
       const cleanup = await Promise.allSettled([
-        stopQaGatewayFixture(gatewayOwner),
+        gatewayOwner.stop().then(({ errors }) => expect(errors).toEqual([])),
         provider.stop(),
       ]);
       const cleanupFailures = cleanup.flatMap((result) =>
