@@ -116,6 +116,25 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     );
   });
 
+  it("keeps the scheduled approval floor in a reused full-permission session", () => {
+    createOpenClawCodingTools({
+      sessionPermissionPolicy: { root: process.cwd(), mode: "full" },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "trusted",
+        execTarget: { host: "gateway", ask: "always" },
+      },
+    });
+
+    expect(shellSpies.defaults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "gateway",
+        ask: "always",
+        bypassHostApprovalFloors: false,
+      }),
+    );
+  });
+
   it("keeps baseline exec behavior without a scheduled exec target", async () => {
     const tools = createOpenClawCodingTools({
       scheduledToolPolicy: { version: 1, mode: "trusted" },

@@ -66,7 +66,7 @@ describe("gateway-hosted exec approvals", () => {
   });
 
   it(
-    "lets OpenClaw-style gateway tool calls request and wait for approval over separate connections",
+    "keeps a scheduled approval floor in a reused full-permission session",
     async () => {
       const envSnapshot = captureEnv(TEST_ENV_KEYS);
       cleanup.push(() => envSnapshot.restore());
@@ -142,6 +142,7 @@ describe("gateway-hosted exec approvals", () => {
         workspaceDir,
         cwd: workspaceDir,
         config,
+        sessionPermissionPolicy: { root: workspaceDir, mode: "full" },
         scheduledToolPolicy: {
           version: 1,
           mode: "trusted",

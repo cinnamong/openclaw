@@ -578,7 +578,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
   // A scheduled cap narrows the rebuilt exec tool to its captured policy.
-  // Defaults carry host/approval floors into resolution; the wrapper below
+  // Its approval floor outranks a reused full session; the wrapper below
   // prevents caller arguments from weakening either restriction.
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
@@ -610,7 +610,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
-      bypassHostApprovalFloors: sessionCoreToolPolicy?.bypassHostApprovalFloors,
+      bypassHostApprovalFloors:
+        scheduledExecTarget?.ask !== "always" && sessionCoreToolPolicy?.bypassHostApprovalFloors,
       host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
       mode: effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
