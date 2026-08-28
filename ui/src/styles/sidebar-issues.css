@@ -48,7 +48,8 @@
   padding-block-end: env(safe-area-inset-bottom, 0px);
   border-width: 1px 0 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  animation: sidebar-issues-sheet-in 180ms var(--ease-out);
+  background: var(--secondary);
+  animation: sidebar-issues-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__grabber {
@@ -132,7 +133,20 @@
 
 .shell--mobile-nav .sidebar-issues-panel__mobile-close {
   display: inline-grid;
+  width: 44px;
+  height: 44px;
   place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform 140ms var(--ease-out);
+}
+
+.shell--mobile-nav .sidebar-issues-panel__mobile-close:active {
+  transform: scale(0.97);
 }
 
 .shell--mobile-nav .sidebar-issues-panel__ask {
@@ -196,6 +210,7 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
+  background: var(--bg-elevated);
 }
 
 .sidebar-issues-panel__list {

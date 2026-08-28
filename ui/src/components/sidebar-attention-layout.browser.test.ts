@@ -139,14 +139,19 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(item!.getBoundingClientRect().right).toBeCloseTo(list!.getBoundingClientRect().right, 1);
   });
 
-  it("keeps mobile dismiss actions visible and touch-sized", () => {
+  it("keeps mobile controls touch-sized and the sheet header visually continuous", () => {
     const shell = document.createElement("div");
     shell.className = "shell shell--mobile-nav";
     shell.innerHTML = `
       <section class="sidebar-issues-panel">
+        <div class="sidebar-issues-panel__grabber"></div>
         <header class="sidebar-issues-panel__header">
           <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
+          <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close" type="button">
+            Close
+          </button>
         </header>
+        <div class="sidebar-issues-panel__list-wrap"></div>
         <div class="sidebar-issues-panel__summary">
           <button class="sidebar-issues-panel__dismiss" type="button">Dismiss</button>
         </div>
@@ -156,6 +161,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     const dismiss = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss")!;
     const dismissShown = shell.querySelector<HTMLElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const close = shell.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
+    const panel = shell.querySelector<HTMLElement>(".sidebar-issues-panel")!;
+    const header = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
+    const list = shell.querySelector<HTMLElement>(".sidebar-issues-panel__list-wrap")!;
     const style = getComputedStyle(dismiss);
 
     expect(style.opacity).toBe("1");
@@ -163,5 +172,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismiss.getBoundingClientRect().width).toBeGreaterThanOrEqual(40);
     expect(dismiss.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
     expect(dismissShown.getBoundingClientRect().height).toBeGreaterThanOrEqual(40);
+    expect(close.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+    expect(close.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(getComputedStyle(close).borderTopWidth)).toBeGreaterThan(0);
+    expect(getComputedStyle(close).borderRadius).toBe("9999px");
+    expect(getComputedStyle(panel).backgroundColor).toBe(getComputedStyle(header).backgroundColor);
+    expect(getComputedStyle(header).backgroundColor).not.toBe(
+      getComputedStyle(list).backgroundColor,
+    );
   });
 });
