@@ -1195,7 +1195,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.registered = true;
     run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(
-      normalizeLiveAssistantBufferedText(run.buffer).trim(),
+      normalizeLiveAssistantBufferedText(run.buffer, { final: true }).trim(),
       { suppressLeadFragments: false },
     );
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";

@@ -3072,6 +3072,11 @@ describe("EmbeddedTuiBackend", () => {
       finalPayloads: [],
       expectedText: "Draft answer",
     },
+    {
+      name: "preserves an ordinary MEDIA-like suffix in the authoritative final answer",
+      finalPayloads: [{ text: "The selected size is\nM" }],
+      expectedText: "The selected size is\nM",
+    },
   ])("$name", async ({ finalPayloads, expectedText }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);

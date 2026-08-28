@@ -2,12 +2,12 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Gateway live chat projector.
 // Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import {
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isRelativeAssistantMediaReference } from "../media/assistant-media-reference.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";

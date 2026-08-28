@@ -532,6 +532,11 @@ suite.define(() => {
           .first()
           .evaluate((element) => getComputedStyle(element, "::after").animationName),
       ).toBe("shimmer");
+      const pendingActionWidths = await checkingCards
+        .locator(".chat-assistant-attachment-card__actions--loading")
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
       expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
       expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
       if (proofDir) {
@@ -545,6 +550,17 @@ suite.define(() => {
         .toBe(4);
       expect(await checkingCards.count()).toBe(0);
       expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const finalActionWidths = await page
+        .locator(
+          ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
+      expect(finalActionWidths).toHaveLength(pendingActionWidths.length);
+      for (const [index, width] of finalActionWidths.entries()) {
+        expect(Math.abs(width - (pendingActionWidths[index] ?? 0))).toBeLessThanOrEqual(0.5);
+      }
       for (const attachment of attachments) {
         const card = page
           .locator(".chat-assistant-attachment-card--compact")

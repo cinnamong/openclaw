@@ -60,9 +60,19 @@ export function renderAssistantAttachmentStatusCard(params: {
           : unavailable
             ? nothing
             : html`<span
-                class="chat-assistant-attachment-card__action-skeleton skeleton"
+                class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
                 aria-hidden="true"
-              ></span>`}
+              >
+                <span class="chat-assistant-attachment-card__action"></span>
+                <span
+                  class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
+                  ><span>${t("chat.attachments.open")}</span></span
+                >
+                <span
+                  class="chat-assistant-attachment-card__action-skeleton skeleton"
+                  aria-hidden="true"
+                ></span>
+              </span>`}
       </div>
     </div>
   `;

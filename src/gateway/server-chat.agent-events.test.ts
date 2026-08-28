@@ -39,9 +39,12 @@ vi.mock("./live-chat-projector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./live-chat-projector.js")>();
   return {
     ...actual,
-    normalizeLiveAssistantBufferedText: (text: string) => {
-      normalizeLiveAssistantBufferedTextMock(text);
-      return actual.normalizeLiveAssistantBufferedText(text);
+    normalizeLiveAssistantBufferedText: (
+      text: string,
+      options?: Parameters<typeof actual.normalizeLiveAssistantBufferedText>[1],
+    ) => {
+      normalizeLiveAssistantBufferedTextMock(text, options);
+      return actual.normalizeLiveAssistantBufferedText(text, options);
     },
   };
 });
@@ -1226,7 +1229,7 @@ describe("agent event handler", () => {
     registerNamedChatRun(chatRunState, "split-media");
 
     for (const [index, delta] of [
-      "Prepared the batch.\nM",
+      "Prepared the batch.\n  M",
       "EDIA:./attachment-catalog-tiny/",
       "demo.jpg",
     ].entries()) {
@@ -1240,7 +1243,7 @@ describe("agent event handler", () => {
     expect(payloads.length).toBeGreaterThan(0);
     for (const payload of payloads) {
       const text = payload.message?.content?.[0]?.text ?? "";
-      expect(text).not.toMatch(/(?:^|\n)(?:M|ME|MED|MEDI|MEDIA:)/u);
+      expect(text).not.toMatch(/(?:^|\n)\s*(?:M|ME|MED|MEDI|MEDIA:)/u);
       expect(text).not.toContain("attachment-catalog-tiny");
     }
     expect(payloads.at(-1)?.message?.content?.[0]?.text).toBe("Prepared the batch.");
