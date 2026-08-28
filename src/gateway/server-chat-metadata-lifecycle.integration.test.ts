@@ -82,7 +82,12 @@ function configureAuthFixture(
     ...(catalogAuthRejected
       ? {
           providerOutcomes: [
-            { provider: "openai", profileId: "openai:default", status: "auth-rejected" },
+            {
+              provider: "openai",
+              profileId: "openai:default",
+              rejectionScope: "catalog",
+              status: "auth-rejected",
+            },
           ],
         }
       : {}),
