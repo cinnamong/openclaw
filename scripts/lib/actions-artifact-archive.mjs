@@ -898,6 +898,100 @@ async function fetchBoundedJson(url, request, params) {
   return value;
 }
 
+export async function downloadExactActionsArtifactArchive(params) {
+  const expected = params.expected;
+  if (!expected || typeof expected !== "object") {
+    throw new Error("Expected Actions artifact metadata is required.");
+  }
+  const repository = assertRepository(expected.repository);
+  const artifactId = assertPositiveInteger(expected.artifactId, "Actions artifact ID");
+  const artifactName = assertArtifactName(expected.artifactName);
+  const artifactDigest = assertArtifactDigest(expected.artifactDigest);
+  const artifactSizeBytes = assertPositiveInteger(
+    expected.artifactSizeBytes,
+    "Actions artifact size",
+  );
+  const artifactExpiresAt = assertTrimmedString(
+    expected.artifactExpiresAt,
+    "Actions artifact expiry",
+  );
+  const runId = assertPositiveInteger(expected.runId, "workflow run ID");
+  const workflowSha = assertCommitSha(expected.workflowSha, "workflow SHA");
+  const token = assertTrimmedString(params.token, "GitHub token");
+  const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
+  const retryAttempts =
+    params.retryAttempts === undefined
+      ? 3
+      : boundedLimit(params.retryAttempts, 5, "GitHub request retry count");
+  const retryDelayMs =
+    params.retryDelayMs === undefined
+      ? 250
+      : boundedLimit(params.retryDelayMs, 5_000, "GitHub retry delay");
+  const maxArchiveBytes = boundedLimit(
+    params.maxArchiveBytes,
+    DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES,
+    "Actions artifact ZIP byte limit",
+  );
+  if (artifactSizeBytes > maxArchiveBytes) {
+    throw new Error("Actions artifact size exceeds the configured archive limit.");
+  }
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const headers = {
+    accept: "application/vnd.github+json",
+    authorization: `Bearer ${token}`,
+    "user-agent": "openclaw-actions-artifact",
+    "x-github-api-version": ACTIONS_ARTIFACT_API_VERSION,
+  };
+  const apiRoot = `https://api.github.com/repos/${repository}`;
+  const request = { fetchImpl, headers, timeoutMs };
+  const retry = { attempts: retryAttempts, delayMs: retryDelayMs };
+  const artifactMetadata = await runBoundedRetry(
+    "GitHub Actions artifact metadata",
+    () =>
+      fetchBoundedJson(`${apiRoot}/actions/artifacts/${artifactId}`, request, {
+        label: "GitHub Actions artifact metadata",
+        maxBytes: DEFAULT_MAX_JSON_BYTES,
+      }),
+    retry,
+  );
+  if (
+    artifactMetadata.id !== artifactId ||
+    artifactMetadata.name !== artifactName ||
+    artifactMetadata.size_in_bytes !== artifactSizeBytes ||
+    artifactMetadata.expired !== false ||
+    artifactMetadata.expires_at !== artifactExpiresAt ||
+    artifactMetadata.digest !== artifactDigest ||
+    artifactMetadata.workflow_run?.id !== runId ||
+    artifactMetadata.workflow_run?.head_sha !== workflowSha
+  ) {
+    throw new Error("Actions artifact metadata does not match the exact artifact tuple.");
+  }
+  const archiveBytes = await runBoundedRetry(
+    "GitHub Actions artifact download",
+    async () => {
+      const response = await fetchImpl(`${apiRoot}/actions/artifacts/${artifactId}/zip`, {
+        headers,
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const bytes = await readBoundedResponseBody(response, {
+        expectedBytes: artifactSizeBytes,
+        label: "GitHub Actions artifact download",
+        maxBytes: maxArchiveBytes,
+      });
+      const actualDigest = sha256Digest(bytes);
+      if (actualDigest !== artifactDigest) {
+        throw new Error(
+          `GitHub Actions artifact digest ${actualDigest} does not match ${artifactDigest}.`,
+        );
+      }
+      return bytes;
+    },
+    retry,
+  );
+  return { archiveBytes, artifactMetadata };
+}
+
 export async function downloadActionsArtifactArchive(params) {
   const expected = requireExpectedBinding(params);
   const token = assertTrimmedString(params.token, "GitHub token");
