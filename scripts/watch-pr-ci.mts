@@ -79,6 +79,31 @@ const RunListSchema = z
 const RunStatusSchema = z
   .object({ status: optionalString, conclusion: optionalNullable(z.string()) })
   .catch({});
+const evidenceId = z.number().int().positive();
+const CompletedRunSchema = z.object({
+  id: evidenceId,
+  workflow_id: evidenceId,
+  head_sha: z.string(),
+  run_attempt: evidenceId,
+  path: z.literal(".github/workflows/ci.yml"),
+  status: z.literal("completed"),
+  conclusion: z.literal("success"),
+});
+const AttemptJobSchema = z.object({
+  id: evidenceId,
+  run_id: evidenceId,
+  run_attempt: evidenceId,
+  head_sha: z.string(),
+  name: z.string().min(1),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  runner_id: evidenceId.nullable(),
+  steps: z.array(z.object({ status: z.string(), conclusion: z.string().nullable() })),
+});
+const AttemptJobsPageSchema = z.object({
+  total_count: z.number().int().nonnegative().max(1_000),
+  jobs: z.array(AttemptJobSchema).max(100),
+});
 
 type RollupCheck = z.infer<typeof RollupCheckSchema>;
 type RollupPayload = z.infer<typeof RollupPayloadSchema>;
@@ -197,7 +222,11 @@ function checkRunIdentity(check: RollupCheck) {
 const newerJob = (a: JobIdentity, b: JobIdentity) =>
   a.runId !== b.runId ? a.runId > b.runId : a.checkId > b.checkId;
 
-export function classifyRollup(rollup: RollupPayload | null | undefined, runs: RunListItem[] = []) {
+export function classifyRollup(
+  rollup: RollupPayload | null | undefined,
+  runs: RunListItem[] = [],
+  reconciledChecks: ReadonlySet<number> = new Set(),
+) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
     0,
@@ -224,6 +253,7 @@ export function classifyRollup(rollup: RollupPayload | null | undefined, runs: R
     }
   }
   let supersededCount = 0;
+  let reconciledCount = 0;
   // Re-triggers leave every prior run's check runs on the SHA forever and GitHub's aggregate
   // counts them. A check is superseded when a newer same-workflow check shares its name
   // (GitHub's latest-name-wins semantics), or when its cancelled workflow has a newer run.
@@ -233,6 +263,11 @@ export function classifyRollup(rollup: RollupPayload | null | undefined, runs: R
     const identity = checkRunIdentity(check);
     if (!identity) {
       return true;
+    }
+    if (check.databaseId !== undefined && reconciledChecks.has(check.databaseId)) {
+      reconciledCount += 1;
+      supersededCount += 1;
+      return false;
     }
     if (check.name && typeof check.databaseId === "number") {
       const best = bestByJob.get(`${identity.workflowId}:${check.name}`);
@@ -274,7 +309,11 @@ export function classifyRollup(rollup: RollupPayload | null | undefined, runs: R
   if (rollup?.state === "SUCCESS") {
     return { verdict: "GREEN", pendingCount, failingNames: [], supersededCount };
   }
-  if (rollup?.state === "ERROR" || rollup?.state === "FAILURE") {
+  if (
+    rollup?.state === "ERROR" ||
+    rollup?.state === "FAILURE" ||
+    (rollup?.state === "PENDING" && reconciledCount > 0)
+  ) {
     if (failingChecks.length > 0) {
       return {
         verdict: "FAILING",
@@ -294,7 +333,16 @@ export function classifyRollup(rollup: RollupPayload | null | undefined, runs: R
         supersededCount,
       };
     }
-    if (pendingCount > 0) {
+    // Reconciliation can explain a stale aggregate, never unknown sibling outcomes.
+    const unknownOutcome =
+      reconciledCount > 0 &&
+      checks.some((check) =>
+        check.kind === "StatusContext"
+          ? check.state !== "SUCCESS"
+          : check.status !== "COMPLETED" ||
+            !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? ""),
+      );
+    if (pendingCount > 0 || unknownOutcome) {
       return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
     }
     // GitHub's aggregate permanently counts superseded cancellations. With full visibility,
@@ -334,6 +382,124 @@ const readRun = (repo: string, runId: number) =>
       GH_READ_OPTIONS,
     ),
   );
+
+function readQueuedPlaceholderEvidence(
+  repo: string,
+  headSha: string,
+  attached: RunListItem,
+  rollup: RollupPayload,
+) {
+  const reconciled = new Set<number>();
+  const contexts = rollup.contexts;
+  const nodes = contexts?.nodes ?? [];
+  if (
+    !["FAILURE", "ERROR", "PENDING"].includes(rollup.state ?? "") ||
+    contexts?.totalCount !== nodes.length ||
+    contexts.pageInfo?.hasNextPage !== false
+  ) {
+    return reconciled;
+  }
+  const queued = nodes.flatMap((check) => {
+    const identity = checkRunIdentity(check);
+    return check.status === "QUEUED" &&
+      check.conclusion === null &&
+      check.name &&
+      check.databaseId !== undefined &&
+      identity?.runId === attached.id &&
+      identity.workflowId === attached.workflow_id
+      ? [{ name: check.name, id: check.databaseId }]
+      : [];
+  });
+  if (queued.length === 0) {
+    return reconciled;
+  }
+  const runPath = `repos/${repo}/actions/runs/${attached.id}`;
+  // Request current evidence through the shared gh seam; the final run read must
+  // not deliberately reuse the snapshot from before job collection.
+  const readEvidence = (endpoint: string) =>
+    execGhJson(["api", endpoint, "-H", "Cache-Control: max-age=0"], GH_READ_OPTIONS);
+  const readCompletedRun = () => CompletedRunSchema.parse(readEvidence(runPath));
+  const run = readCompletedRun();
+  if (
+    run.id !== attached.id ||
+    run.head_sha !== headSha ||
+    run.workflow_id !== attached.workflow_id
+  ) {
+    return reconciled;
+  }
+  const jobs: z.infer<typeof AttemptJobSchema>[] = [];
+  let totalCount: number | undefined;
+  // Attempt-specific pagination is bounded like the rollup; incomplete or duplicate
+  // pages cannot establish that no active/failed same-name sibling exists.
+  for (let page = 1; page <= 10; page += 1) {
+    const response = AttemptJobsPageSchema.parse(
+      readEvidence(`${runPath}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`),
+    );
+    totalCount ??= response.total_count;
+    if (response.total_count !== totalCount || response.jobs.length === 0) {
+      return reconciled;
+    }
+    jobs.push(...response.jobs);
+    if (jobs.length >= totalCount) {
+      break;
+    }
+  }
+  if (jobs.length !== totalCount || new Set(jobs.map((job) => job.id)).size !== jobs.length) {
+    return reconciled;
+  }
+  const sameAttempt = (job: z.infer<typeof AttemptJobSchema>) =>
+    job.run_id === run.id && job.run_attempt === run.run_attempt && job.head_sha === headSha;
+  const unassignedQueued = (job: z.infer<typeof AttemptJobSchema>) =>
+    job.status === "queued" && job.conclusion === null && job.runner_id === null;
+  for (const name of new Set(queued.map((check) => check.name))) {
+    const checks = queued.filter((check) => check.name === name);
+    const siblings = jobs.filter((job) => job.name === name);
+    const aliases = siblings.filter(unassignedQueued);
+    const executed = siblings.filter((job) => !unassignedQueued(job));
+    const replacement = executed[0];
+    if (
+      executed.length !== 1 ||
+      !replacement ||
+      !siblings.every(sameAttempt) ||
+      !checks.every((check) => aliases.some((job) => job.id === check.id)) ||
+      replacement.status !== "completed" ||
+      replacement.conclusion !== "success" ||
+      replacement.runner_id === null ||
+      replacement.steps.length === 0 ||
+      replacement.steps.some(
+        (step) =>
+          step.status !== "completed" ||
+          !["success", "skipped", "neutral"].includes(step.conclusion ?? ""),
+      )
+    ) {
+      continue;
+    }
+    // The list can copy executed steps onto queued aliases, including ones absent
+    // from GraphQL. Prove the entire group unexecuted before dropping any visible ID.
+    const unexecuted = aliases.every((alias) => {
+      const direct = AttemptJobSchema.parse(readEvidence(`repos/${repo}/actions/jobs/${alias.id}`));
+      return (
+        direct.id === alias.id &&
+        direct.name === name &&
+        sameAttempt(direct) &&
+        unassignedQueued(direct) &&
+        direct.steps.length === 0
+      );
+    });
+    if (unexecuted) {
+      for (const check of checks) {
+        reconciled.add(check.id);
+      }
+    }
+  }
+  // Reruns reuse a run ID. Evidence from the completed attempt cannot authorize
+  // completion after a newer attempt starts while the job pages are being read.
+  const current = readCompletedRun();
+  if (JSON.stringify(current) !== JSON.stringify(run)) {
+    return new Set<number>();
+  }
+  return reconciled;
+}
 
 export function classifyRunAttachment(runId: number, run: RunStatus, after?: number) {
   if (run.conclusion === "skipped") {
@@ -399,7 +565,7 @@ export function collectRollupContexts(
     ...firstPage,
     statusCheckRollup: {
       ...firstPage.statusCheckRollup,
-      contexts: { ...firstContexts, nodes },
+      contexts: { ...firstContexts, nodes, pageInfo },
     },
   };
 }
@@ -506,7 +672,7 @@ async function main(argv = process.argv.slice(2)) {
             if (classification.warning) {
               console.log(classification.warning);
             }
-            return { runId: candidate.id };
+            return { run: candidate };
           }
         }
       } catch (error) {
@@ -524,7 +690,8 @@ async function main(argv = process.argv.slice(2)) {
   if ("exitCode" in attachment) {
     return attachment.exitCode;
   }
-  const { runId } = attachment;
+  const attached = attachment.run;
+  const runId = attached.id;
   console.log(`ATTACHED run=${runId} url=https://github.com/${args.repo}/actions/runs/${runId}`);
 
   const watchDeadline = Date.now() + args.timeout * 1000;
@@ -558,6 +725,7 @@ async function main(argv = process.argv.slice(2)) {
         if (blocked !== null) {
           return blocked;
         }
+        let targetRuns: RunListItem[] = [];
         let result = classifyRollup(pr.statusCheckRollup);
         if (
           result.verdict === "FAILING" &&
@@ -568,9 +736,27 @@ async function main(argv = process.argv.slice(2)) {
               checkRunIdentity(check),
           )
         ) {
-          result = classifyRollup(pr.statusCheckRollup, findTargetRuns(args.repo, args.headSha));
+          targetRuns = findTargetRuns(args.repo, args.headSha);
+          result = classifyRollup(pr.statusCheckRollup, targetRuns);
         }
         lastState = pr.statusCheckRollup?.state ?? "NONE";
+        lastPending = result.pendingCount;
+        const run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
+        if (
+          result.verdict === "PENDING" &&
+          result.pendingCount > 0 &&
+          run?.status === "completed" &&
+          run.conclusion === "success" &&
+          pr.statusCheckRollup
+        ) {
+          const reconciled = readQueuedPlaceholderEvidence(
+            args.repo,
+            args.headSha,
+            attached,
+            pr.statusCheckRollup,
+          );
+          result = classifyRollup(pr.statusCheckRollup, targetRuns, reconciled);
+        }
         lastPending = result.pendingCount;
         console.log(
           `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
@@ -578,13 +764,12 @@ async function main(argv = process.argv.slice(2)) {
         if (result.verdict === "FAILING") {
           return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
         }
-        const run = readRun(args.repo, runId);
-        if (run.status === "completed" && run.conclusion !== "success") {
+        if (run?.status === "completed" && run.conclusion !== "success") {
           return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
         }
         if (
           result.verdict === "GREEN" &&
-          run.status === "completed" &&
+          run?.status === "completed" &&
           run.conclusion === "success"
         ) {
           return emit("GREEN", 0);

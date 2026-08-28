@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -13,10 +14,88 @@ import {
   sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
+import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const sha = "a".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
+  const binDir = tempDirs.make("openclaw-watch-pr-ci-");
+  const ghPath = join(binDir, "gh");
+  writeFileSync(ghPath, ghScript);
+  chmodSync(ghPath, 0o755);
+  return spawnSync(
+    process.execPath,
+    [
+      "scripts/watch-pr-ci.mjs",
+      "42",
+      headSha,
+      "--attach-timeout",
+      "1",
+      "--timeout",
+      "1",
+      "--interval",
+      "1",
+      ...options,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+    },
+  );
+}
+
+function replayPlaceholder(
+  fixture = structuredClone(placeholderFixture),
+  evidence: {
+    runSnapshots?: unknown[];
+    jobPages?: unknown[];
+    directJobs?: unknown[];
+    merged?: boolean;
+  } = {},
+) {
+  const root = tempDirs.make("openclaw-watch-pr-ci-replay-");
+  const payload = join(root, "payload.json");
+  const calls = join(root, "calls.jsonl");
+  // The live capture is merged. Only lifecycle is reopened for the historical watch.
+  if (!evidence.merged) fixture.graphql.data.repository.pullRequest.state = "OPEN";
+  writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
+  writeFileSync(calls, "");
+  const result = runWatcher(
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
+const args = process.argv.slice(2);
+const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
+let value;
+if (args[0] === "pr" && args[1] === "view") value = fixture.graphql.data.repository.pullRequest;
+else if (args[0] === "run" && args[1] === "view") value = fixture.run;
+else if (args[0] === "api" && args[1] === "graphql") value = fixture.graphql;
+else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [fixture.run] };
+else if (args[1] === runPath) {
+  const reads = calls.filter((call) => call[1] === runPath).length;
+  value = fixture.runSnapshots?.[Math.min(reads, fixture.runSnapshots.length - 1)] ?? fixture.run;
+}
+else if (args[1]?.startsWith(runPath + "/attempts/3/jobs?per_page=100&page=")) {
+  const page = Number(new URLSearchParams(args[1].split("?")[1]).get("page"));
+  value = (fixture.jobPages ?? [fixture.jobs])[page - 1];
+  if (value === undefined) throw new Error("missing attempt jobs page");
+}
+else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
+  const jobIds = ${JSON.stringify(placeholderFixture.directJobs.map((job) => job.id))};
+  value = fixture.directJobs[jobIds.indexOf(Number(args[1].split("/").at(-1)))];
+  if (value === undefined) throw new Error("missing direct job response");
+}
+else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
+console.log(JSON.stringify(value));
+`,
+    placeholderFixture.run.head_sha,
+  );
+  return { ...result, calls: readFileSync(calls, "utf8") };
+}
 
 describe("watch-pr-ci", () => {
   it("parses defaults and overrides", () => {
@@ -111,10 +190,7 @@ describe("watch-pr-ci", () => {
   it.skipIf(process.platform === "win32")(
     "attaches to real CI when a newer draft workflow was skipped",
     () => {
-      const binDir = tempDirs.make("openclaw-watch-pr-ci-");
-      const ghPath = join(binDir, "gh");
-      writeFileSync(
-        ghPath,
+      const result = runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
   "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
@@ -134,28 +210,8 @@ case "$1 $2" in
   *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 2 ;;
 esac
 `,
-      );
-      chmodSync(ghPath, 0o755);
-
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/watch-pr-ci.mjs",
-          "42",
-          sha,
-          "--completion",
-          "ci-run",
-          "--attach-timeout",
-          "1",
-          "--timeout",
-          "1",
-          "--interval",
-          "1",
-        ],
-        {
-          encoding: "utf8",
-          env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
-        },
+        sha,
+        ["--completion", "ci-run"],
       );
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -163,6 +219,290 @@ esac
       expect(result.stdout).toContain("GREEN");
     },
   );
+
+  describe.skipIf(process.platform === "win32")("queued placeholder CLI evidence", () => {
+    it.each([
+      { state: "FAILURE", observed: 1 },
+      { state: "PENDING", observed: 1 },
+      { state: "FAILURE", observed: 2 },
+    ])(
+      "reconciles the captured queued group with aggregate $state and $observed observed checks",
+      ({ state, observed }) => {
+        const fixture = structuredClone(placeholderFixture);
+        const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+        rollup.state = state;
+        if (observed === 2) {
+          // Synthetic visibility of another captured alias proves group reads are shared.
+          const queuedCheck = rollup.contexts.nodes.find(
+            (check) => check.databaseId === 98802098786,
+          );
+          assert(queuedCheck);
+          rollup.contexts.nodes.push({ ...queuedCheck, databaseId: 98802098559 });
+          rollup.contexts.totalCount += 1;
+        }
+        const result = replayPlaceholder(fixture);
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.stdout).toContain(`pending=0 superseded=${observed}`);
+        expect(result.stdout).toContain("GREEN");
+        // Cost and ordering matter: only one attempt scan, direct proof, then run revalidation.
+        const calls: string[][] = result.calls
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(calls.filter((call) => call[1]?.includes("/attempts/"))).toHaveLength(1);
+        const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
+        expect(directReads.map((call) => Number(call[1]?.split("/").at(-1))).toSorted()).toEqual(
+          fixture.directJobs.map((job) => job.id).toSorted(),
+        );
+        expect(calls.at(-1)?.[1]).toBe("repos/openclaw/openclaw/actions/runs/33155056361");
+        expect(calls.at(-1)).toContain("Cache-Control: max-age=0");
+      },
+    );
+
+    it("keeps the captured merged PR closed", () => {
+      const result = replayPlaceholder(structuredClone(placeholderFixture), { merged: true });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(10);
+      expect(result.stdout).toContain("PR-CLOSED state=MERGED");
+      expect(result.calls).not.toContain("/actions/");
+    });
+
+    it.each([
+      ["no same-name replacement", { name: "different job" }],
+      ["active replacement", { status: "in_progress", conclusion: null }],
+      ["failed replacement", { conclusion: "failure" }],
+      ["unexecuted replacement", { runner_id: null, steps: [] }],
+      ["another attempt", { run_attempt: 2 }],
+      ["another run", { run_id: 33155056362 }],
+      ["another head", { head_sha: sha }],
+      ["missing attempt", { run_attempt: undefined }],
+    ])("keeps pending for %s in the attempt list", (_label, patch) => {
+      const fixture = structuredClone(placeholderFixture);
+      Object.assign(
+        fixture.jobs.jobs.find((job) => job.id === 98802098754)!,
+        patch,
+      );
+      const result = replayPlaceholder(fixture);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each([
+      ["assigned queued job", { runner_id: 123 }],
+      ["executed steps", { steps: [{ status: "completed", conclusion: "success" }] }],
+      ["missing steps", { steps: undefined }],
+      ["missing runner", { runner_id: undefined }],
+      ["different check ID", { id: 98802098787 }],
+      ["different name", { name: "different job" }],
+      ["different run", { run_id: 33155056362 }],
+      ["different head", { head_sha: sha }],
+      ["different attempt", { run_attempt: 4 }],
+      ["active job", { status: "in_progress" }],
+      ["failed job", { conclusion: "failure" }],
+    ])("requires direct unexecuted-job proof: %s", (_label, patch) => {
+      const fixture = structuredClone(placeholderFixture);
+      const result = replayPlaceholder(fixture, {
+        directJobs: fixture.directJobs.map((job) =>
+          job.id === 98802098786 ? { ...job, ...patch } : job,
+        ),
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each([
+      ["executed", { steps: [{ status: "completed", conclusion: "success" }] }],
+      ["active", { status: "in_progress", runner_id: 123 }],
+      ["failed", { status: "completed", conclusion: "failure" }],
+      ["malformed", { run_attempt: undefined }],
+    ])("keeps the group pending when a non-rollup sibling is %s", (_label, patch) => {
+      const fixture = structuredClone(placeholderFixture);
+      const result = replayPlaceholder(fixture, {
+        directJobs: fixture.directJobs.map((job) =>
+          job.id === 98802098559 ? { ...job, ...patch } : job,
+        ),
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each([
+      ["missing ID", { id: undefined }],
+      ["missing head", { head_sha: undefined }],
+      ["missing workflow", { workflow_id: undefined }],
+      ["missing attempt", { run_attempt: undefined }],
+      ["different workflow", { workflow_id: 1 }],
+      ["different workflow path", { path: ".github/workflows/other.yml" }],
+      ["different head", { head_sha: sha }],
+      ["different run", { id: 33155056362 }],
+      ["active newer attempt", { run_attempt: 4, status: "in_progress", conclusion: null }],
+      ["failed newer attempt", { run_attempt: 4, conclusion: "failure" }],
+      ["cancelled newer attempt", { run_attempt: 4, conclusion: "cancelled" }],
+      ["successful newer attempt", { run_attempt: 4 }],
+    ])("rejects changed run evidence after collecting jobs: %s", (_label, patch) => {
+      const fixture = structuredClone(placeholderFixture);
+      const result = replayPlaceholder(fixture, {
+        runSnapshots: [fixture.run, { ...fixture.run, ...patch }],
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each([
+      { status: "in_progress", conclusion: null },
+      { status: "completed", conclusion: "failure" },
+      { status: "completed", conclusion: "success" },
+    ])(
+      "does not ignore an extra $status/$conclusion same-name sibling",
+      ({ status, conclusion }) => {
+        const fixture = structuredClone(placeholderFixture);
+        const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
+        assert(replacement);
+        const result = replayPlaceholder(fixture, {
+          jobPages: [
+            {
+              total_count: fixture.jobs.total_count + 1,
+              jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799, status, conclusion }],
+            },
+          ],
+        });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      },
+    );
+
+    it.each([
+      [
+        "unrelated workflow",
+        { checkSuite: { workflowRun: { databaseId: 33155056361, workflow: { databaseId: 1 } } } },
+      ],
+      [
+        "unrelated run",
+        {
+          checkSuite: {
+            workflowRun: { databaseId: 33155056362, workflow: { databaseId: 209874334 } },
+          },
+        },
+      ],
+      ["missing check ID", { databaseId: undefined }],
+      ["App check without lineage", { checkSuite: undefined }],
+      ["in-progress check", { status: "IN_PROGRESS" }],
+      [
+        "required status context",
+        { kind: "StatusContext", context: "required status", state: "PENDING" },
+      ],
+    ])("does not reconcile %s", (_label, patch) => {
+      const fixture = structuredClone(placeholderFixture);
+      const queuedCheck =
+        fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts.nodes.find(
+          (check) => check.databaseId === 98802098786,
+        );
+      assert(queuedCheck);
+      Object.assign(queuedCheck, patch);
+      const result = replayPlaceholder(fixture);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.calls).not.toContain("/attempts/");
+    });
+
+    it.each([
+      [
+        "pending required App check",
+        { kind: "CheckRun", name: "required App", status: "QUEUED" },
+        16,
+      ],
+      [
+        "failed required App check",
+        { kind: "CheckRun", name: "required App", status: "COMPLETED", conclusion: "FAILURE" },
+        15,
+      ],
+      [
+        "pending required status context",
+        { kind: "StatusContext", context: "required status", state: "EXPECTED" },
+        16,
+      ],
+      [
+        "failed required status context",
+        { kind: "StatusContext", context: "required status", state: "FAILURE" },
+        15,
+      ],
+      [
+        "unknown completed conclusion",
+        { kind: "CheckRun", name: "required App", status: "COMPLETED" },
+        16,
+      ],
+    ] as const)("keeps %s independently blocking", (_label, sibling, exitCode) => {
+      const fixture = structuredClone(placeholderFixture);
+      const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
+      // Synthetic counterexamples add a separate, lineage-less required context.
+      Object.assign(contexts, {
+        totalCount: contexts.totalCount + 1,
+        nodes: [...contexts.nodes, sibling],
+      });
+      const result = replayPlaceholder(fixture);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each(["unknown", "truncated", "unfinished pagination", "missing count"])(
+      "does not green an %s rollup",
+      (scenario) => {
+        const fixture = structuredClone(placeholderFixture);
+        const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+        if (scenario === "unknown") rollup.state = "UNKNOWN";
+        else if (scenario === "truncated") rollup.contexts.totalCount += 1;
+        else if (scenario === "missing count")
+          Object.assign(rollup.contexts, { totalCount: undefined });
+        else rollup.contexts.pageInfo.hasNextPage = true;
+        const result = replayPlaceholder(fixture);
+        expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
+        expect(result.stdout).not.toContain("GREEN");
+        expect(result.calls).not.toContain("/attempts/");
+      },
+    );
+
+    it.each(["in_progress", "queued", "completed"])(
+      "avoids evidence scans on routine %s polls",
+      (status) => {
+        const fixture = structuredClone(placeholderFixture);
+        fixture.run.status = status;
+        if (status === "completed") {
+          const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
+          rollup.state = "SUCCESS";
+          rollup.contexts.nodes = rollup.contexts.nodes.slice(0, 1);
+          rollup.contexts.totalCount = 1;
+        }
+        const result = replayPlaceholder(fixture);
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
+          status === "completed" ? 0 : 16,
+        );
+        expect(result.calls).not.toContain("/attempts/");
+        expect(result.calls).not.toContain("/actions/jobs/");
+      },
+    );
+
+    it.each(["complete", "missing page", "changed count", "duplicate IDs", "over limit"])(
+      "requires complete bounded attempt pagination: %s",
+      (scenario) => {
+        const fixture = structuredClone(placeholderFixture);
+        // Synthetic pagination padding from the captured successful sibling; IDs/names
+        // are deliberately unique so the target group only appears on the second page.
+        const padding = Array.from({ length: 100 }, (_, index) => ({
+          ...fixture.jobs.jobs.find((job) => job.id === 98802098742)!,
+          id: scenario === "duplicate IDs" ? 1_000 : 1_000 + index,
+          name: `pagination sibling ${index}`,
+        }));
+        const firstPage = { total_count: 100 + fixture.jobs.total_count, jobs: padding };
+        const lastPage = { total_count: firstPage.total_count, jobs: fixture.jobs.jobs };
+        const jobPages = [firstPage, lastPage];
+        if (scenario === "missing page") jobPages.pop();
+        if (scenario === "changed count") lastPage.total_count += 1;
+        if (scenario === "over limit") firstPage.total_count = 1_001;
+        const result = replayPlaceholder(fixture, { jobPages });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
+          scenario === "complete" ? 0 : 16,
+        );
+        if (scenario === "complete") expect(result.calls).toContain("per_page=100&page=2");
+      },
+    );
+  });
 
   it("sanitizes untrusted check names for terminal output", () => {
     expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");
