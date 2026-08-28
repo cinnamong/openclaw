@@ -780,6 +780,7 @@ async function discover(args) {
       ghOptions,
     );
     if (artifacts === null) {
+      output("state", "unavailable");
       output("reused", "false");
       output("reuse_reason", "candidate artifact inventory exceeded the bounded scan");
       return;
@@ -800,6 +801,7 @@ async function discover(args) {
     });
   } catch (error) {
     if (error instanceof CandidateDiscoveryBudgetError) {
+      output("state", "unavailable");
       output("reused", "false");
       output("reuse_reason", error.message);
       return;
@@ -807,11 +809,13 @@ async function discover(args) {
     if (classifyReleaseGhTransportError(error) !== "transient") {
       throw error;
     }
+    output("state", "unavailable");
     output("reused", "false");
     output("reuse_reason", "candidate discovery unavailable after bounded retries");
     return;
   }
   if (!selected) {
+    output("state", "miss");
     output("reused", "false");
     output("reuse_reason", "no trusted exact candidate artifact");
     return;
@@ -854,10 +858,12 @@ async function discover(args) {
     ) {
       throw error;
     }
+    output("state", "miss");
     output("reused", "false");
     output("reuse_reason", error.message);
     return;
   }
+  output("state", "hit");
   output("reused", "true");
   output("reuse_reason", "trusted exact candidate artifact");
   output("binding_json", JSON.stringify(binding));

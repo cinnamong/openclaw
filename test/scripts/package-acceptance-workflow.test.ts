@@ -3934,10 +3934,13 @@ describe("package artifact reuse", () => {
     const pluginDocker = workflowJob(PLUGIN_PRERELEASE_WORKFLOW, "plugin-prerelease-docker-suite");
 
     expect(discovery.if).toContain("github.run_attempt == 1");
+    expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
     );
     expect(jobNeeds(prepare)).toContain("candidate_discovery");
+    expect(prepare.if).toContain("needs.candidate_discovery.outputs.state == 'miss'");
+    expect(prepare.if).not.toContain("outputs.reused != 'true'");
     expect(jobNeeds(candidateBinding)).toEqual([
       "resolve_target",
       "evidence_reuse",
