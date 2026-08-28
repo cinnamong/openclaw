@@ -98,7 +98,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       splitsAssistantCommentary ||
       splitsRuntimeActivity ||
       (shouldSplitBySender &&
-        (currentGroup.senderLabel !== senderLabel ||
+        ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
