@@ -1017,6 +1017,211 @@ describe("native host registration", () => {
     });
     await expect(fs.readFile(manifest.path, "utf8")).resolves.toContain(movedNativeHost);
   });
+
+  it.for([
+    { target: "nodePath", failure: "missing", recovery: "repair" },
+    { target: "nativeHostPath", failure: "missing", recovery: "install" },
+    { target: "nodePath", failure: "missing", recovery: "uninstall" },
+    { target: "nodePath", failure: "non-executable", recovery: "repair" },
+    {
+      target: "nativeHostPath",
+      failure: "unreadable",
+      recovery: "install",
+    },
+    { target: "nativeHostPath", failure: "directory", recovery: "repair" },
+    { target: "nodePath", failure: "symlink", recovery: "install" },
+    { target: "nativeHostPath", failure: "unsafe-mode", recovery: "repair" },
+    { target: "nodePath", failure: "relative", recovery: "repair" },
+  ] as const)(
+    "keeps an owned $failure $target non-ready and allows $recovery",
+    async ({ target, failure, recovery }, { skip }) => {
+      if (process.platform === "win32" || (failure === "unreadable" && process.getuid?.() === 0)) {
+        skip();
+      }
+      const value = await fixture();
+      const versionDir = path.join(value.root, "runtime's version '1");
+      await fs.mkdir(versionDir, { mode: 0o700 });
+      const registeredDeps = {
+        ...value.deps,
+        nodePath: path.join(versionDir, "node"),
+        nativeHostPath: path.join(versionDir, "native-host-entry.js"),
+        env: {
+          ...value.deps.env,
+          OPENCLAW_CONFIG_PATH: path.join(value.root, "config's dir", "openclaw.json"),
+        },
+      };
+      const executed = path.join(value.root, "target-executed");
+      await fs.writeFile(value.deps.nodePath, `#!/bin/sh\n: > '${executed}'\nexit 1\n`);
+      await fs.writeFile(
+        value.nativeHostPath,
+        `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(executed)}, 'executed');\n`,
+      );
+      // Both replacement paths stay available while the registered version disappears.
+      await fs.copyFile(value.deps.nodePath, registeredDeps.nodePath);
+      await fs.copyFile(value.nativeHostPath, registeredDeps.nativeHostPath);
+      const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
+      if (!chromium) {
+        throw new Error("missing Chromium fixture root");
+      }
+      await writeSecurePreferences({
+        userDataDir: chromium.userDataDir,
+        profile: "Default",
+        entries: { [FOUNDATION_STORE_ID]: { location: 1, from_webstore: true } },
+      });
+      const params = { bundledDir: value.bundledDir, pluginRoot: value.pluginRoot, waitMs: 1_000 };
+      const before = await installChromeExtensionBootstrap({ ...params, deps: registeredDeps });
+      expect(before.manualSetupRequired, before.issues.join("\n")).toBe(false);
+      const registration = before.registrations.find((entry) => entry.product === "chromium");
+      if (!registration) {
+        throw new Error("missing Chromium fixture registration");
+      }
+      const manifestBytes = await fs.readFile(registration.manifestPath, "utf8");
+      const manifest = JSON.parse(manifestBytes) as { path: string };
+      let launcherBytes = await fs.readFile(manifest.path, "utf8");
+      const deps = {
+        ...registeredDeps,
+        nodePath: value.deps.nodePath,
+        nativeHostPath: value.nativeHostPath,
+      };
+      await expect(browserExtensionStatus({ ...params, deps })).resolves.toMatchObject({
+        manualSetupRequired: false,
+        issues: [],
+      });
+      const registeredTarget = registeredDeps[target];
+      if (failure === "relative") {
+        const relativeTarget = path.relative(process.cwd(), registeredTarget);
+        await fs.access(relativeTarget, fs.constants.X_OK);
+        const quoteTarget = (target: string) => `'${target.replaceAll("'", `'"'"'`)}'`;
+        const relativeLauncher = launcherBytes.replace(
+          quoteTarget(registeredTarget),
+          quoteTarget(relativeTarget),
+        );
+        expect(relativeLauncher).not.toBe(launcherBytes);
+        launcherBytes = relativeLauncher;
+        await fs.writeFile(manifest.path, launcherBytes);
+      } else if (failure === "missing" || failure === "directory" || failure === "symlink") {
+        await fs.rename(registeredTarget, `${registeredTarget}.removed`);
+        if (failure === "directory") {
+          await fs.mkdir(registeredTarget, { mode: 0o700 });
+        } else if (failure === "symlink") {
+          await fs.symlink(deps[target], registeredTarget);
+        }
+      } else {
+        await fs.chmod(
+          registeredTarget,
+          failure === "non-executable" ? 0o600 : failure === "unreadable" ? 0o000 : 0o666,
+        );
+      }
+
+      const broken = await browserExtensionStatus({ ...params, deps });
+      expect(broken.manualSetupRequired).toBe(true);
+      const brokenRegistration = broken.registrations.find((entry) => entry.product === "chromium");
+      if (!brokenRegistration?.issue) {
+        throw new Error("missing Chromium fixture registration issue");
+      }
+      expect(brokenRegistration).toMatchObject({
+        state: "owned",
+        extensionIds: registration.extensionIds,
+      });
+      expect(brokenRegistration.issue).toContain("openclaw browser extension install");
+      expect(brokenRegistration.issue.length).toBeLessThan(200);
+      expect(broken.issues).toEqual([`Chromium: ${brokenRegistration.issue}`]);
+      expect(JSON.stringify(broken)).not.toMatch(/pairingString|token|Bearer|runtime's version/u);
+      expect(brokenRegistration.issue).not.toContain(value.root);
+      expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+      expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
+      expect(existsSync(executed)).toBe(false);
+
+      if (failure === "non-executable" || failure === "unreadable") {
+        const onProgress = vi.fn();
+        const reinstall = await installChromeExtensionBootstrap({
+          ...params,
+          deps: registeredDeps,
+          onProgress,
+        });
+        expect(reinstall.manualSetupRequired).toBe(true);
+        expect(onProgress).not.toHaveBeenCalledWith(
+          expect.stringContaining("Native bootstrap is ready"),
+        );
+        expect(reinstall.issues.join("\n")).toContain("pre-registration refused");
+        expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+        expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
+      }
+
+      if (recovery === "uninstall") {
+        await expect(uninstallChromeExtensionNativeHosts({ deps })).resolves.toEqual({
+          removed: [registration.manifestPath, manifest.path],
+          refused: [],
+          manualRequired: false,
+        });
+        expect(existsSync(registration.manifestPath)).toBe(false);
+        expect(existsSync(manifest.path)).toBe(false);
+        return;
+      }
+      if (recovery === "repair") {
+        await expect(repairOwnedChromeExtensionNativeHosts({ ...params, deps })).resolves.toEqual({
+          changes: ["Repaired Chromium OpenClaw native messaging registration."],
+          warnings: [],
+        });
+      } else {
+        expect(
+          (await installChromeExtensionBootstrap({ ...params, deps })).manualSetupRequired,
+        ).toBe(false);
+      }
+      const repaired = await browserExtensionStatus({ ...params, deps });
+      expect(repaired.manualSetupRequired).toBe(false);
+      expect(repaired.issues).toEqual([]);
+      expect(repaired.registrations).toEqual(before.registrations);
+      expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+      expect((await fs.stat(registration.manifestPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(manifest.path)).mode & 0o777).toBe(0o700);
+      expect(existsSync(executed)).toBe(false);
+    },
+  );
+
+  it("keeps an unavailable unused host as a warning after repairing the discovered product", async () => {
+    const value = await fixture();
+    const roots = chromeProductRoots(value.deps);
+    const chrome = roots.find((root) => root.product === "chrome");
+    const chromium = roots.find((root) => root.product === "chromium");
+    if (!chrome || !chromium) {
+      throw new Error("missing browser fixture roots");
+    }
+    await fs.mkdir(chrome.userDataDir, { recursive: true, mode: 0o700 });
+    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
+    await writeSecurePreferences({
+      userDataDir: chromium.userDataDir,
+      profile: "Default",
+      entries: {
+        [await predictedId(installed, value.deps.platform)]: { location: 4, path: installed },
+      },
+    });
+    const params = { bundledDir: value.bundledDir, pluginRoot: value.pluginRoot, waitMs: 1_000 };
+    const before = await installChromeExtensionBootstrap({ ...params, deps: value.deps });
+    expect(before.manualSetupRequired).toBe(false);
+    expect(before.registrations.filter((entry) => entry.state === "owned")).toHaveLength(2);
+    const nodePath = `${value.deps.nodePath}-replacement`;
+    await fs.rename(value.deps.nodePath, nodePath);
+    const deps = { ...value.deps, nodePath };
+    const broken = await browserExtensionStatus({ ...params, deps });
+    expect(broken.manualSetupRequired).toBe(true);
+    await expect(repairOwnedChromeExtensionNativeHosts({ ...params, deps })).resolves.toEqual({
+      changes: ["Repaired Chromium OpenClaw native messaging registration."],
+      warnings: [],
+    });
+    const repaired = await browserExtensionStatus({ ...params, deps });
+    expect(repaired.manualSetupRequired).toBe(false);
+    expect(repaired.registrations.find((entry) => entry.product === "chromium")).toEqual(
+      before.registrations.find((entry) => entry.product === "chromium"),
+    );
+    const unused = repaired.registrations.find((entry) => entry.product === "chrome");
+    if (!unused) {
+      throw new Error("missing Chrome fixture registration");
+    }
+    expect(unused.state).toBe("owned");
+    expect(unused.issue).toContain("openclaw browser extension install");
+    expect(repaired.issues).toEqual([`Google Chrome: ${unused.issue}`]);
+  });
 });
 
 describe("platform roots", () => {
