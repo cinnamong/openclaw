@@ -415,6 +415,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         }
         const expectNativeAvailable = async (available: boolean) => {
           const expected = { models: expectedModels(available) };
+          await expect(
+            lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
+          ).resolves.toMatchObject({ metadata: expected });
           await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toMatchObject({
             metadata: expected,
@@ -448,22 +451,42 @@ describe("gateway chat metadata lifecycle composition", () => {
         await loadModelCatalog();
         await lifecycle.refresh(); // Matching prepared/auth facts must not freeze the old boolean.
         await expectNativeAvailable(true);
+        const lockedSession = {
+          authProfileOverride: "openai:missing",
+          authProfileOverrideSource: "user" as const,
+        };
         await expect(
-          lifecycle.read({
+          lifecycle.readStartup({
             agentId: "main",
-            sessionEntry: {
-              authProfileOverride: "openai:missing",
-              authProfileOverrideSource: "user",
-            },
+            sessionEntry: lockedSession,
+            readPolicy: "ready",
           }),
-        ).resolves.toMatchObject({
+        ).resolves.toBeUndefined();
+        const lockedMetadata = await lifecycle.read({
+          agentId: "main",
+          sessionEntry: lockedSession,
+        });
+        expect(lockedMetadata).toMatchObject({
           models: wildcard
             ? []
             : [expect.objectContaining({ id: "codex-latest", available: false })],
         });
+        await expect(
+          lifecycle.readStartup({
+            agentId: "main",
+            sessionEntry: lockedSession,
+            readPolicy: "ready",
+          }),
+        ).resolves.toMatchObject({ metadata: lockedMetadata });
 
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
+        // Equivalent lifecycle facts can retain a generation, but its prepared wrappers
+        // still belong to the previous config object until a canonical read refreshes them.
+        await expect(
+          lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
+        ).resolves.toBeUndefined();
+        await lifecycle.read({ agentId: "main" });
         await expectNativeAvailable(true);
 
         revision += 1;
