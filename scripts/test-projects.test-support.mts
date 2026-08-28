@@ -2111,10 +2111,6 @@ const pluginSdkEntryOwners = [
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
-    ".github/workflows/mantis-telegram-live.yml",
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
-  ],
-  [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
   ],
@@ -2364,10 +2360,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "u",
     ),
     [packageAcceptance, workflowGuards],
-  ],
-  [
-    /^\.github\/workflows\/mantis-telegram-desktop-proof\.yml$/u,
-    ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [
     /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
