@@ -1169,6 +1169,10 @@ export async function performGatewaySessionReset(params: {
           return;
         }
       }
+      resetPreparationError = resolveFastModeSelectionError(currentEntry);
+      if (resetPreparationError) {
+        return;
+      }
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
       resetPreparationError = resolvePluginSessionOwnershipError({

@@ -10,12 +10,9 @@ import {
   revalidateChatMetadata,
   subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
-  buildQualifiedChatModelValue,
-  normalizeChatModelProviderId,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import {
+  isChatFastModeProviderSupported,
   normalizeChatFastModeInput,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
@@ -29,6 +26,7 @@ import {
 } from "../chat/components/chat-model-controls.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
 import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+import { resolveDraftModelTarget } from "./model-target.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -63,46 +61,6 @@ type ReconciledNewSessionSelection = {
   thinkingLevel: string;
   repaired: boolean;
 };
-
-type DraftModelTarget = {
-  entry?: ModelCatalogEntry;
-  model: string;
-  provider: string | null;
-};
-
-function resolveDraftModelTarget(
-  model: string | null | undefined,
-  provider: string | null | undefined,
-  catalog: ModelCatalogEntry[],
-): DraftModelTarget | null {
-  const value = resolvePreferredServerChatModelValue(model, provider, catalog);
-  if (!value) {
-    return null;
-  }
-  const normalized = value.toLowerCase();
-  const entry = catalog.find(
-    (candidate) =>
-      buildQualifiedChatModelValue(candidate.id, candidate.provider).toLowerCase() === normalized,
-  );
-  if (entry) {
-    return {
-      entry,
-      model: entry.id,
-      provider: normalizeChatModelProviderId(entry.provider) || null,
-    };
-  }
-  const separator = value.indexOf("/");
-  if (separator > 0) {
-    return {
-      model: value.slice(separator + 1),
-      provider: normalizeChatModelProviderId(value.slice(0, separator)) || null,
-    };
-  }
-  return {
-    model: value,
-    provider: normalizeChatModelProviderId(provider ?? "") || null,
-  };
-}
 
 export class NewSessionModelControl {
   private selectionGeneration = 0;
@@ -710,6 +668,12 @@ export class NewSessionModelControl {
         this.selected = selection.model;
         this.contextWindow = "";
         this.thinkingLevel = selection.thinkingLevel;
+        this.fastMode = isChatFastModeProviderSupported(
+          (resolveDraftModelTarget(selection.model, undefined, this.catalog) ?? defaultTarget)
+            ?.provider,
+        )
+          ? this.fastMode
+          : undefined;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {

@@ -20,6 +20,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combi
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -32,6 +33,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -2646,6 +2648,70 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
   ).toMatchObject({ fastMode: true });
+});
+
+test("sessions.create rechecks Fast Mode before interrupting reset work", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:main";
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-race", { fastMode: false }) },
+  });
+  let interrupted = false;
+  let releaseAdmission = () => {};
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key, "sess-fast-race"],
+    assertAllowed: () => undefined,
+    onInterrupt: () => {
+      interrupted = true;
+      releaseAdmission();
+    },
+  });
+  releaseAdmission = admission.release;
+  let replaced = false;
+  const commitGuard = () => {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
+    const current = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    if (!current) {
+      throw new Error("expected current main session");
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key, storePath },
+      { ...current, fastMode: true },
+    );
+  };
+  const { createGatewaySession } = await import("./session-create-service.js");
+
+  try {
+    const denied = await createGatewaySession({
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      resetMainWhenUnspecified: true,
+      fastMode: false,
+      requestingOperatorScopes: ["operator.write"],
+      allowExistingModelSelection: false,
+      commandSource: "test",
+      commitGuard,
+    });
+
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+    expect(interrupted).toBe(false);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: "sess-fast-race",
+      fastMode: true,
+    });
+  } finally {
+    admission.release();
+  }
 });
 
 test("sessions.reset preserves the recorded permission boundary", async () => {

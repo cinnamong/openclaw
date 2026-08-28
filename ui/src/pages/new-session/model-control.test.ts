@@ -215,6 +215,37 @@ describe("new-session model runtime", () => {
     },
   );
 
+  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
+      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+      ?.click();
+    expect(control.fastMode).toBe(true);
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
+      ?.click();
+
+    expect(control.selected).toBe("ollama/llama-4");
+    expect(control.fastMode).toBeUndefined();
+    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
+      "[data-chat-speed-toggle]",
+    );
+    expect(unsupportedToggle?.disabled).toBe(true);
+    expect(unsupportedToggle?.dataset.chatSpeedState).toBe("default");
+  });
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
