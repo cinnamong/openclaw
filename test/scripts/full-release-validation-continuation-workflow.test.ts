@@ -21,7 +21,9 @@ describe("full release same-parent recovery workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
       "docker_runtime_assets_preflight",
+      "candidate_discovery",
       "prepare_release_candidate",
+      "candidate_binding",
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
@@ -44,6 +46,10 @@ describe("full release same-parent recovery workflow", () => {
     expect(cache).toMatchObject({
       id: "plan_cache",
       "continue-on-error": true,
+      with: {
+        key: "full-release-execution-plan-v1-${{ github.run_id }}",
+        path: "${{ runner.temp }}/full-release-execution-plan",
+      },
     });
     expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
     expect(restore).toMatchObject({
