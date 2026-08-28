@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -461,6 +462,90 @@ cat "$FAKE_GH_PAYLOAD"
       "reuse_reason=candidate artifact inventory exceeded the bounded scan",
     );
     expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
+    expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
+  });
+
+  it("marks a selected candidate with a missing constituent unavailable", async () => {
+    const root = tempDirs.make("full-release-candidate-selected-missing-");
+    const bin = join(root, "bin");
+    const inputPath = join(root, "request-input.json");
+    const outputPath = join(root, "github-output");
+    const archivePath = join(root, "candidate.zip");
+    const artifactListingPath = join(root, "artifacts.json");
+    const workflowRunPath = join(root, "workflow-run.json");
+    const workflowJobsPath = join(root, "workflow-jobs.json");
+    const artifactMetadataPath = join(root, "artifact-metadata.json");
+    const fetchPreloadPath = join(root, "fetch-preload.mjs");
+    mkdirSync(bin);
+    const ghPath = join(bin, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+case "$*" in
+  *"actions/artifacts?name="*) cat "$FAKE_GH_ARTIFACT_LISTING" ;;
+  *"actions/runs/77/jobs?filter=all"*) cat "$FAKE_GH_WORKFLOW_JOBS" ;;
+  *"actions/runs/77"*) cat "$FAKE_GH_WORKFLOW_RUN" ;;
+  *"actions/artifacts/101"*)
+    echo "HTTP 404: candidate constituent artifact missing" >&2
+    exit 1
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const { archive, manifest, metadata } = await fixture();
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(archivePath, archive);
+    writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
+    writeFileSync(workflowRunPath, JSON.stringify(workflowRun()));
+    writeFileSync(workflowJobsPath, JSON.stringify([workflowJobs(manifest)]));
+    writeFileSync(artifactMetadataPath, JSON.stringify(metadata));
+    writeFileSync(
+      fetchPreloadPath,
+      `import { readFileSync } from "node:fs";
+const archive = readFileSync(process.env.FAKE_ARTIFACT_ARCHIVE);
+const metadata = JSON.parse(readFileSync(process.env.FAKE_ARTIFACT_METADATA, "utf8"));
+globalThis.fetch = async (url) => {
+  const value = String(url);
+  if (value.endsWith("/actions/artifacts/301")) {
+    return new Response(JSON.stringify(metadata), {
+      headers: { "content-type": "application/json" },
+      status: 200,
+    });
+  }
+  if (value.endsWith("/actions/artifacts/301/zip")) {
+    return new Response(archive, { status: 200 });
+  }
+  throw new Error(\`unexpected fetch: \${value}\`);
+};
+`,
+    );
+    const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAKE_ARTIFACT_ARCHIVE: archivePath,
+        FAKE_ARTIFACT_METADATA: artifactMetadataPath,
+        FAKE_GH_ARTIFACT_LISTING: artifactListingPath,
+        FAKE_GH_WORKFLOW_JOBS: workflowJobsPath,
+        FAKE_GH_WORKFLOW_RUN: workflowRunPath,
+        GH_TOKEN: "test-token",
+        GITHUB_OUTPUT: outputPath,
+        NODE_OPTIONS: `--import=${pathToFileURL(fetchPreloadPath).href}`,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+      timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toContain(
+      "reuse_reason=full release candidate package artifact is unavailable",
+    );
+    expect(readFileSync(outputPath, "utf8")).toContain("state=unavailable");
+    expect(readFileSync(outputPath, "utf8")).not.toContain("state=miss");
     expect(readFileSync(outputPath, "utf8")).toContain("reused=false");
   });
 });

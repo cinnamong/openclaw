@@ -858,7 +858,7 @@ async function discover(args) {
     ) {
       throw error;
     }
-    output("state", "miss");
+    output("state", "unavailable");
     output("reused", "false");
     output("reuse_reason", error.message);
     return;
