@@ -42,6 +42,7 @@ import {
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
+import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -147,13 +148,14 @@ function createModelsListEntryEvaluator(params: {
             })
           : evaluation;
       const provider = normalizeProviderId(entry.provider);
-      // Exact route success outranks a separate catalog rejection for the same profile.
+      // API-key catalog discovery can reject /models while the configured model route works.
       return params.providerOutcomes?.some(
         (outcome) =>
-          !resolved.runtimeRouteSucceeded &&
           outcome.status === "auth-rejected" &&
           normalizeProviderId(outcome.provider) === provider &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
+          (outcome.profileId === undefined ||
+            (outcome.profileId === resolved.selectedProfileId &&
+              resolveProviderModelRouteAuthRequirement(resolved.selectedAuthMode) !== "api-key")),
       )
         ? {
             ...resolved,
