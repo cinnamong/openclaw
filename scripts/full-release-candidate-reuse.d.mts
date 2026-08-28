@@ -9,6 +9,7 @@ export interface SelectedFullReleaseCandidate {
 
 export function selectTrustedFullReleaseCandidate(input: {
   artifacts: unknown[];
+  deadlineMs?: number;
   now?: number;
   readWorkflowRun: (runId: number) => Promise<unknown>;
   readWorkflowJobs: (runId: number) => Promise<unknown>;
@@ -16,6 +17,7 @@ export function selectTrustedFullReleaseCandidate(input: {
 }): Promise<SelectedFullReleaseCandidate | null>;
 
 export function loadSelectedFullReleaseCandidate(input: {
+  deadlineMs?: number;
   downloadArchive?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   fetchImpl?: typeof fetch;
   now?: number;
