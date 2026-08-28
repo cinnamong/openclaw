@@ -25,8 +25,8 @@ if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
   swUrl.searchParams.set("v", currentControlUiBuildId);
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "sw-updated" && event.data.version !== currentControlUiBuildId) {
-      window.location.reload();
+    if (event.data?.type === "sw-version-probe") {
+      event.ports[0]?.postMessage({ version: currentControlUiBuildId });
     }
   });
   void navigator.serviceWorker
