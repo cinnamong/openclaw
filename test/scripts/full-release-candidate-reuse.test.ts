@@ -203,7 +203,7 @@ describe("trusted full release candidate selection", () => {
       readWorkflowJobs: async (runId) => {
         const jobs = workflowJobs(manifest, { runId });
         if (runId === 78) {
-          jobs.jobs[1].conclusion = "failure";
+          jobs.jobs[1]!.conclusion = "failure";
         }
         return jobs;
       },
@@ -402,7 +402,7 @@ describe("full release candidate loading", () => {
       request: manifest.request,
     });
     const jobs = workflowJobs(manifest);
-    jobs.jobs[1].conclusion = "failure";
+    jobs.jobs[1]!.conclusion = "failure";
     await expect(
       loadSelectedFullReleaseCandidate({
         downloadArchive: async () => ({ archiveBytes: archive, artifactMetadata: metadata }),

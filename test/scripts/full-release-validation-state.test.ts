@@ -2137,10 +2137,13 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     });
     expect(valid.status, valid.stderr).toBe(0);
 
-    const changed = { ...generatedManifest(sealedPlan), childEvidence };
-    changed.candidateBinding = {
-      ...candidate,
-      evidenceArtifact: { ...candidate.evidenceArtifact, id: "999" },
+    const changed = {
+      ...generatedManifest(sealedPlan),
+      candidateBinding: {
+        ...candidate,
+        evidenceArtifact: { ...candidate.evidenceArtifact, id: "999" },
+      },
+      childEvidence,
     };
     writeFileSync(manifestPath, JSON.stringify(changed));
     const invalid = spawnSync(process.execPath, [SCRIPT, "validate-manifest"], {
