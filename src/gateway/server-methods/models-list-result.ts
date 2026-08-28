@@ -147,10 +147,10 @@ function createModelsListEntryEvaluator(params: {
             })
           : evaluation;
       const provider = normalizeProviderId(entry.provider);
-      // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
-      // profile discovery tested; widening it would hide routes backed by another valid profile.
+      // Exact route success outranks a separate catalog rejection for the same profile.
       return params.providerOutcomes?.some(
         (outcome) =>
+          !resolved.runtimeRouteSucceeded &&
           outcome.status === "auth-rejected" &&
           normalizeProviderId(outcome.provider) === provider &&
           (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
