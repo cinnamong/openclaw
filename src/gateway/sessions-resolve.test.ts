@@ -1,10 +1,15 @@
 // Session resolve tests cover canonical/legacy key lookup, store migration,
 // agent scoping, listed-session selection, and protocol error mapping.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  registerAgentRunContext,
+  resetAgentRunRegistryForTest,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../infra/agent-run-registry.js";
 
 const hoisted = vi.hoisted(() => ({
   listSessionsFromStoreMock: vi.fn(),
@@ -65,7 +70,18 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   };
 
+  const expectSpawnedByDenied = async () => {
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: canonicalKey, spawnedBy: "controller-1", allowMissing: true },
+      }),
+    ).resolves.toEqual({ ok: true, missing: true });
+  };
+
   beforeEach(() => {
+    subagentRuns.clear();
+    resetAgentRunRegistryForTest();
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReset();
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -79,6 +95,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
       store: targetStore,
     }));
+  });
+
+  afterEach(() => {
+    subagentRuns.clear();
+    resetAgentRunRegistryForTest();
   });
 
   it("hides canonical keys that fail the spawnedBy visibility filter", async () => {
@@ -122,181 +143,105 @@ describe("resolveSessionKeyFromResolveParams", () => {
     await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
   });
 
-  it("authorizes durable spawn lineage after the display liveness window expires", async () => {
-    // Exact-key spawnedBy resolution is spawn ownership, not child-listing
-    // display: a long-ended child stays reachable to its recorded parent.
-    targetStore = {
-      [canonicalKey]: {
-        sessionId: "sess-old-child",
+  it.each([
+    {
+      name: "durable parent lineage after display expiry",
+      entry: {
         spawnedBy: "controller-1",
         parentSessionKey: "controller-1",
-        updatedAt: Date.now() - 3 * 60 * 60 * 1_000,
         endedAt: Date.now() - 3 * 60 * 60 * 1_000,
       },
+      allowed: true,
+    },
+    {
+      name: "legacy lineage after foreign control ends",
+      entry: { spawnedBy: "controller-1" },
+      run: { controller: "agent:main:other", ended: true },
+      allowed: true,
+    },
+    {
+      name: "legacy lineage during foreign live control",
+      entry: { spawnedBy: "controller-1" },
+      run: { controller: "agent:main:other", contextSessionKey: canonicalKey },
+      allowed: false,
+    },
+    {
+      name: "explicit parent lineage during foreign live control",
+      entry: { parentSessionKey: "controller-1" },
+      run: { controller: "agent:main:other", contextSessionKey: canonicalKey },
+      allowed: true,
+    },
+    {
+      name: "matching live controller without stored lineage",
+      entry: {},
+      run: { controller: "controller-1", contextSessionKey: canonicalKey },
+      allowed: true,
+    },
+    {
+      name: "terminal controller without stored lineage",
+      entry: {},
+      run: { controller: "controller-1", ended: true, contextSessionKey: canonicalKey },
+      allowed: false,
+    },
+    {
+      name: "contextless controller snapshot without stored lineage",
+      entry: {},
+      run: { controller: "controller-1" },
+      allowed: false,
+    },
+    {
+      name: "controller context bound to another session",
+      entry: {},
+      run: { controller: "controller-1", contextSessionKey: "agent:main:other" },
+      allowed: false,
+    },
+    {
+      name: "controller context from an earlier gateway lifecycle",
+      entry: {},
+      run: { controller: "controller-1", contextSessionKey: canonicalKey, rotateLifecycle: true },
+      allowed: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    entry: Partial<SessionEntry>;
+    run?: {
+      controller: string;
+      contextSessionKey?: string;
+      ended?: boolean;
+      rotateLifecycle?: boolean;
     };
-
-    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-  });
-
-  it("denies a spawnedBy-only row while a different live controller owns the child", async () => {
-    // Live control supersedes the stale spawnedBy fact; explicit
-    // parentSessionKey lineage (below) is unaffected.
+    allowed: boolean;
+  }>)("$name", async ({ entry, run, allowed }) => {
+    const now = Date.now();
     targetStore = {
-      [canonicalKey]: {
-        sessionId: "sess-steered-child",
-        spawnedBy: "controller-1",
-        updatedAt: Date.now(),
-      },
+      [canonicalKey]: { sessionId: "sess-child", updatedAt: now, ...entry },
     };
-    subagentRuns.set(
-      "run-steered",
-      createSubagentRunRecord({
-        runId: "run-steered",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "agent:main:other",
-        controllerSessionKey: "agent:main:other",
-        requesterDisplayKey: "other",
-        startedAt: Date.now(),
-      }),
-    );
-    try {
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg: {},
-          p: { key: canonicalKey, spawnedBy: "controller-1", allowMissing: true },
+    if (run) {
+      const runId = "run-controller";
+      subagentRuns.set(
+        runId,
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: canonicalKey,
+          requesterSessionKey: run.controller,
+          controllerSessionKey: run.controller,
+          requesterDisplayKey: run.controller,
+          startedAt: now - 60_000,
+          ...(run.ended ? { endedAt: now - 30_000 } : {}),
         }),
-      ).resolves.toEqual({ ok: true, missing: true });
-    } finally {
-      subagentRuns.delete("run-steered");
+      );
+      if (run.contextSessionKey) {
+        registerAgentRunContext(runId, { sessionKey: run.contextSessionKey });
+      }
+      if (run.rotateLifecycle) {
+        rotateAgentRunRegistryLifecycleGeneration();
+      }
     }
-  });
 
-  it("keeps parentSessionKey lineage authoritative when a live run is controlled elsewhere", async () => {
-    targetStore = {
-      [canonicalKey]: {
-        sessionId: "sess-steered-child",
-        parentSessionKey: "controller-1",
-        updatedAt: Date.now(),
-      },
-    };
-    subagentRuns.set(
-      "run-steered",
-      createSubagentRunRecord({
-        runId: "run-steered",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "agent:main:other",
-        controllerSessionKey: "agent:main:other",
-        requesterDisplayKey: "other",
-        startedAt: Date.now(),
-      }),
-    );
-    try {
+    if (allowed) {
       await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-    } finally {
-      subagentRuns.delete("run-steered");
-    }
-  });
-
-  it("restores spawnedBy-only authority once no live run controls the child", async () => {
-    // A retained terminal record from another controller must not keep
-    // superseding the spawner after control ends.
-    targetStore = {
-      [canonicalKey]: {
-        sessionId: "sess-released-child",
-        spawnedBy: "controller-1",
-        updatedAt: Date.now(),
-      },
-    };
-    subagentRuns.set(
-      "run-released",
-      createSubagentRunRecord({
-        runId: "run-released",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "agent:main:other",
-        controllerSessionKey: "agent:main:other",
-        requesterDisplayKey: "other",
-        startedAt: Date.now() - 10 * 60_000,
-        endedAt: Date.now() - 5 * 60_000,
-      }),
-    );
-    try {
-      await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-    } finally {
-      subagentRuns.delete("run-released");
-    }
-  });
-
-  it("authorizes the live run controller without stored lineage", async () => {
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-adopted-child", updatedAt: Date.now() },
-    };
-    subagentRuns.set(
-      "run-adopted",
-      createSubagentRunRecord({
-        runId: "run-adopted",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "controller-1",
-        requesterDisplayKey: "controller-1",
-        startedAt: Date.now(),
-      }),
-    );
-    try {
-      await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
-    } finally {
-      subagentRuns.delete("run-adopted");
-    }
-  });
-
-  const expectSpawnedByDenied = async () => {
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1", allowMissing: true },
-      }),
-    ).resolves.toEqual({ ok: true, missing: true });
-  };
-
-  it("denies a retained terminal run controller without stored lineage", async () => {
-    // A former controller's terminal record is history, not current authority.
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-ended-child", updatedAt: Date.now() },
-    };
-    subagentRuns.set(
-      "run-ended",
-      createSubagentRunRecord({
-        runId: "run-ended",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "controller-1",
-        requesterDisplayKey: "controller-1",
-        startedAt: Date.now() - 10 * 60_000,
-        endedAt: Date.now() - 5 * 60_000,
-      }),
-    );
-    try {
+    } else {
       await expectSpawnedByDenied();
-    } finally {
-      subagentRuns.delete("run-ended");
-    }
-  });
-
-  it("denies a stale unended run controller without stored lineage", async () => {
-    targetStore = {
-      [canonicalKey]: { sessionId: "sess-stale-child", updatedAt: Date.now() },
-    };
-    subagentRuns.set(
-      "run-stale",
-      createSubagentRunRecord({
-        runId: "run-stale",
-        childSessionKey: canonicalKey,
-        requesterSessionKey: "controller-1",
-        requesterDisplayKey: "controller-1",
-        startedAt: Date.now() - 3 * 60 * 60 * 1_000,
-      }),
-    );
-    try {
-      await expectSpawnedByDenied();
-    } finally {
-      subagentRuns.delete("run-stale");
     }
   });
 

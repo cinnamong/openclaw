@@ -48,7 +48,6 @@ import {
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { AgentToolGatewayRequestCaller } from "./tools/in-process-gateway.js";
-import { resolveSessionToolAccess } from "./tools/sessions-access.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
@@ -110,8 +109,29 @@ function makeRunRecord(overrides: Partial<SubagentRunRecordOverrides>): Subagent
   );
 }
 
+function createResolverGateway(onMethod?: (method: string) => void): AgentToolGatewayRequestCaller {
+  return async ({ method, params }) => {
+    onMethod?.(method);
+    if (method !== "sessions.resolve") {
+      throw new Error(`session access reached gateway method: ${method}`);
+    }
+    const resolved = await resolveSessionKeyFromResolveParams({
+      cfg: getRuntimeConfig(),
+      client: null,
+      p: params as never,
+    });
+    if (!resolved.ok) {
+      throw new Error(resolved.error.message);
+    }
+    return ("missing" in resolved ? { ok: false } : resolved) as never;
+  };
+}
+
 describe("subagent orphan recovery — faithful restart path", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE",
+  ]);
   let tempStateDir: string | null = null;
 
   beforeEach(async () => {
@@ -240,7 +260,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     );
   });
 
-  it("keeps parent history/send tree authorization after restart recovery ends", async () => {
+  it("keeps durable tree authorization after restart recovery ends", async () => {
     const now = Date.now();
     const parentSessionKey = "agent:main:parent-session";
     const childSessionKey = "agent:main:subagent:recovered-child";
@@ -281,80 +301,42 @@ describe("subagent orphan recovery — faithful restart path", () => {
     const persisted = (await readSubagentSessionStore(storePath))[childSessionKey];
     expect(persisted).toMatchObject({ spawnedBy: parentSessionKey, parentSessionKey });
 
-    const callGateway: AgentToolGatewayRequestCaller = async ({ method, params }) => {
-      if (method !== "sessions.resolve") {
-        throw new Error(`unexpected gateway method: ${method}`);
-      }
-      const resolved = await resolveSessionKeyFromResolveParams({
+    await expect(
+      resolveSessionKeyFromResolveParams({
         cfg: getRuntimeConfig(),
         client: null,
-        p: params as never,
-      });
-      if (!resolved.ok) {
-        throw new Error(resolved.error.message);
-      }
-      return ("missing" in resolved ? { ok: false } : resolved) as never;
-    };
-    for (const action of ["history", "send"] as const) {
-      const access = await resolveSessionToolAccess({
-        action,
-        requesterAgentId: "main",
-        requesterSessionKey: parentSessionKey,
-        targetAgentId: "main",
-        targetSessionKey: childSessionKey,
-        requesterOwned: false,
-        visibility: "tree",
-        a2aPolicy: { enabled: false, matchesAllow: () => false, isAllowed: () => false },
-        callGateway,
-      });
-      expect(access).toMatchObject({ allowed: true });
-    }
+        p: { key: childSessionKey, spawnedBy: parentSessionKey },
+      }),
+    ).resolves.toMatchObject({ ok: true, key: childSessionKey });
   });
 
-  it("stops a denied spawnedBy-only sender before any agent dispatch", async () => {
+  it("denies a persisted controller without a live agent run before dispatch", async () => {
     const now = Date.now();
-    const parentSessionKey = "agent:main:legacy-parent";
-    const childSessionKey = "agent:main:subagent:controlled-child";
-    // Legacy row: spawnedBy only, no parentSessionKey. Another session's live
-    // run controls the child, so the spawner must be denied at the tool
-    // boundary — before sessions_send can reach the gateway "agent" dispatch.
+    const parentSessionKey = "agent:main:parent";
+    const childSessionKey = "agent:main:subagent:persisted-child";
     await writeSubagentSessionEntry({
       stateDir: tempStateDir!,
       agentId: "main",
       sessionKey: childSessionKey,
-      sessionId: "sess-controlled-child",
+      sessionId: "sess-persisted-child",
       updatedAt: now,
-      defaultSessionId: "sess-controlled-child",
-      spawnedBy: parentSessionKey,
+      defaultSessionId: "sess-persisted-child",
     });
-    addSubagentRunForTests(
-      makeRunRecord({
-        runId: "run-foreign-controller",
-        childSessionKey,
-        requesterSessionKey: "agent:main:other-controller",
-        controllerSessionKey: "agent:main:other-controller",
-        requesterDisplayKey: "other-controller",
-        createdAt: now - 60_000,
-        startedAt: now - 55_000,
-      }),
-    );
+    const persistedRun = makeRunRecord({
+      runId: "run-persisted-controller",
+      childSessionKey,
+      requesterSessionKey: parentSessionKey,
+      controllerSessionKey: parentSessionKey,
+      requesterDisplayKey: "parent",
+      createdAt: now - 60_000,
+      startedAt: now - 55_000,
+    });
+    persistSubagentRunsToDiskOrThrow(new Map([[persistedRun.runId, persistedRun]]));
+    resetSubagentRegistryForTests({ persist: false });
+    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
 
     const gatewayMethods: string[] = [];
-    const callGateway: AgentToolGatewayRequestCaller = async ({ method, params }) => {
-      gatewayMethods.push(method);
-      if (method !== "sessions.resolve") {
-        throw new Error(`denied sessions_send reached gateway method: ${method}`);
-      }
-      const resolved = await resolveSessionKeyFromResolveParams({
-        cfg: getRuntimeConfig(),
-        client: null,
-        p: params as never,
-      });
-      if (!resolved.ok) {
-        throw new Error(resolved.error.message);
-      }
-      return ("missing" in resolved ? { ok: false } : resolved) as never;
-    };
+    const callGateway = createResolverGateway((method) => gatewayMethods.push(method));
     const sendTool = createSessionsSendTool({
       agentSessionKey: parentSessionKey,
       config: getRuntimeConfig(),
@@ -362,14 +344,13 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
     const result = (await sendTool.execute("send-denied", {
       sessionKey: childSessionKey,
-      message: "should never dispatch",
+      message: "must not dispatch",
     })) as { content?: Array<{ type?: string; text?: string }> };
     const text = result.content?.find((part) => part.type === "text")?.text ?? "";
     const payload = JSON.parse(text) as { status?: string; error?: string };
     expect(payload.status).toBe("forbidden");
     expect(payload.error).toContain("restricted to the current session tree");
-    // The denial happened before dispatch: only resolver lookups reached the
-    // gateway, never the "agent" run method.
+    expect(gatewayMethods.length).toBeGreaterThan(0);
     expect(gatewayMethods.every((method) => method === "sessions.resolve")).toBe(true);
   });
 
