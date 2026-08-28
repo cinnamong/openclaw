@@ -25,16 +25,21 @@ const CANDIDATE_PUBLISHER_JOB_NAME =
   "Prepare shared release candidate / Bind full release candidate evidence";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const MAX_CANDIDATE_ARCHIVE_BYTES = 1024 * 1024;
+const MAX_CANDIDATES_TO_EVALUATE = 5;
 const MAX_CANDIDATE_MANIFEST_BYTES = 32 * 1024;
 const MAX_ARTIFACT_PAGES = 10;
-const MIN_CANDIDATE_REMAINING_MS = 2 * 60 * 60 * 1000;
+const MIN_CANDIDATE_REMAINING_MS = 14 * 60 * 60 * 1000;
 const GH_TIMEOUT_MS = 60_000;
+const CANDIDATE_GH_TIMEOUT_MS = 20_000;
+const CANDIDATE_GH_RETRY_ATTEMPTS = 2;
 const GH_RETRY_BASE_DELAY_MS = 1_000;
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 function fail(message) {
   throw new Error(message);
 }
+
+class CandidateConstituentUnavailableError extends Error {}
 
 function positiveInteger(value) {
   const number = Number(value);
@@ -141,6 +146,11 @@ function workflowPath(value) {
 function trustedWorkflowRun(value, candidate, request) {
   // A failed parent can still contribute a valid candidate when its producer
   // job succeeded; the exact producer job is verified after artifact selection.
+  const active = ["in_progress", "waiting"].includes(value?.status) && value?.conclusion === null;
+  const terminal =
+    value?.status === "completed" &&
+    typeof value?.conclusion === "string" &&
+    value.conclusion.length > 0;
   if (
     !isRecord(value) ||
     value.id !== candidate.runId ||
@@ -148,9 +158,7 @@ function trustedWorkflowRun(value, candidate, request) {
     value.head_sha !== request.toolingSha ||
     value.event !== "workflow_dispatch" ||
     workflowPath(value.path) !== FULL_RELEASE_WORKFLOW_PATH ||
-    value.status !== "completed" ||
-    typeof value.conclusion !== "string" ||
-    value.conclusion.length === 0 ||
+    (!active && !terminal) ||
     value.repository?.full_name !== request.repository ||
     value.head_repository?.full_name !== request.repository ||
     value.repository?.id !== candidate.artifact.workflow_run.repository_id ||
@@ -194,7 +202,8 @@ export async function selectTrustedFullReleaseCandidate({
       candidateArtifactMetadata(artifact, expectedName, validatedRequest.toolingSha, now),
     )
     .filter(Boolean)
-    .toSorted(newestCandidateFirst);
+    .toSorted(newestCandidateFirst)
+    .slice(0, MAX_CANDIDATES_TO_EVALUATE);
   for (const candidate of candidates) {
     let run;
     try {
@@ -237,6 +246,58 @@ function artifactExpiryIsFuture(binding, now, minimumRemainingMs) {
     const expiresAt = timestamp(artifact.expiresAt);
     return expiresAt && expiresAt.milliseconds > now + minimumRemainingMs;
   });
+}
+
+function candidateConstituentArtifacts(binding) {
+  return [
+    ["package", binding.package.artifact],
+    ["prepublish plugin registry", binding.prepublishPluginRegistry.artifact],
+    ["shared image", binding.sharedImage.artifact],
+  ];
+}
+
+async function validateCandidateConstituentArtifacts({
+  binding,
+  minimumRemainingMs,
+  now,
+  readArtifact,
+  unavailableAsMiss,
+}) {
+  for (const [label, artifact] of candidateConstituentArtifacts(binding)) {
+    let metadata;
+    try {
+      metadata = await readArtifact(artifact.id);
+    } catch (error) {
+      if (unavailableAsMiss && isMissingMetadataError(error)) {
+        throw new CandidateConstituentUnavailableError(
+          `full release candidate ${label} artifact is unavailable`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (
+      !isRecord(metadata) ||
+      JSON.stringify(artifactIdentityFromMetadata(metadata, artifact.runAttempt)) !==
+        JSON.stringify(artifact) ||
+      metadata.workflow_run?.head_sha !== binding.producer.workflowSha
+    ) {
+      fail(`full release candidate ${label} artifact identity changed`);
+    }
+    const expiresAt = timestamp(metadata.expires_at);
+    if (
+      metadata.expired !== false ||
+      !expiresAt ||
+      expiresAt.milliseconds <= now + minimumRemainingMs
+    ) {
+      if (unavailableAsMiss) {
+        throw new CandidateConstituentUnavailableError(
+          `full release candidate ${label} artifact is expired or near expiry`,
+        );
+      }
+      fail(`full release candidate ${label} artifact is expired or near expiry`);
+    }
+  }
 }
 
 export function validateCandidateBinding(
@@ -332,19 +393,18 @@ function validateProducerWorkflowRun(run, binding, options = {}) {
   ) {
     fail("full release candidate producer workflow attempt is invalid");
   }
-  const current =
-    runId === positiveInteger(options.consumerRunId) &&
-    runAttempt === positiveInteger(options.consumerRunAttempt);
-  if (current) {
-    if (!["in_progress", "waiting"].includes(run.status) || run.conclusion !== null) {
-      fail("current full release candidate producer workflow attempt is not active");
-    }
-  } else if (
-    run.status !== "completed" ||
-    typeof run.conclusion !== "string" ||
-    run.conclusion.length === 0
-  ) {
-    fail("prior full release candidate producer workflow attempt is not terminal");
+  const active = ["in_progress", "waiting"].includes(run.status) && run.conclusion === null;
+  const terminal =
+    run.status === "completed" && typeof run.conclusion === "string" && run.conclusion.length > 0;
+  if (!active && !terminal) {
+    const current =
+      runId === positiveInteger(options.consumerRunId) &&
+      runAttempt === positiveInteger(options.consumerRunAttempt);
+    fail(
+      current
+        ? "current full release candidate producer workflow attempt is not active"
+        : "prior full release candidate producer workflow attempt is not active or terminal",
+    );
   }
 }
 
@@ -406,6 +466,7 @@ export async function loadSelectedFullReleaseCandidate({
   downloadArchive = downloadExactActionsArtifactArchive,
   fetchImpl,
   now = Date.now(),
+  readArtifact,
   readRunAttempt,
   readWorkflowJobs,
   request,
@@ -415,6 +476,7 @@ export async function loadSelectedFullReleaseCandidate({
   const validatedRequest = validateFullReleaseCandidateRequest(request);
   if (
     !isRecord(selected?.artifact) ||
+    typeof readArtifact !== "function" ||
     typeof readRunAttempt !== "function" ||
     typeof readWorkflowJobs !== "function"
   ) {
@@ -435,6 +497,13 @@ export async function loadSelectedFullReleaseCandidate({
       request: validatedRequest,
     },
   );
+  await validateCandidateConstituentArtifacts({
+    binding,
+    minimumRemainingMs: MIN_CANDIDATE_REMAINING_MS,
+    now,
+    readArtifact,
+    unavailableAsMiss: true,
+  });
   const run = await readRunAttempt(binding.producer.runId, binding.producer.runAttempt);
   validateProducerWorkflowRun(run, binding);
   validateCandidateWorkflowJobs(
@@ -486,6 +555,13 @@ export async function verifySealedFullReleaseCandidate({
 }) {
   const binding = validateCandidateBinding(bindingInput, { now });
   const artifactMetadata = await readArtifact(binding.evidenceArtifact.id);
+  await validateCandidateConstituentArtifacts({
+    binding,
+    minimumRemainingMs: 0,
+    now,
+    readArtifact,
+    unavailableAsMiss: false,
+  });
   const run = await readRunAttempt(binding.producer.runId, binding.producer.runAttempt);
   validateProducerWorkflowRun(run, binding, { consumerRunAttempt, consumerRunId });
   validateCandidateWorkflowJobs(
@@ -516,9 +592,14 @@ export async function verifySealedFullReleaseCandidate({
   return verified;
 }
 
-function runGhJson(repository, path, label, { paginate = false } = {}) {
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+function runGhJson(
+  repository,
+  path,
+  label,
+  { attempts = 3, paginate = false, timeoutMs = GH_TIMEOUT_MS } = {},
+) {
+  let lastError = new Error(`${label} failed`);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const args = ["api"];
     if (paginate) {
       args.push("--paginate", "--slurp");
@@ -528,7 +609,7 @@ function runGhJson(repository, path, label, { paginate = false } = {}) {
       encoding: "utf8",
       killSignal: "SIGKILL",
       maxBuffer: 2 * 1024 * 1024,
-      timeout: GH_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
     if (result.error) {
       lastError = result.error;
@@ -545,7 +626,7 @@ function runGhJson(repository, path, label, { paginate = false } = {}) {
         );
       }
     }
-    if (attempt === 3 || classifyReleaseGhTransportError(lastError) !== "transient") {
+    if (attempt === attempts || classifyReleaseGhTransportError(lastError) !== "transient") {
       throw lastError;
     }
     Atomics.wait(
@@ -558,19 +639,25 @@ function runGhJson(repository, path, label, { paginate = false } = {}) {
   throw lastError;
 }
 
-function readCandidateWorkflowJobs(repository, runId, runAttempt) {
+function readCandidateWorkflowJobs(repository, runId, runAttempt, options) {
   return readWorkflowJobPages(
     repository,
     `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+    options,
   );
 }
 
-function readCandidateWorkflowHistory(repository, runId) {
-  return readWorkflowJobPages(repository, `actions/runs/${runId}/jobs?filter=all&per_page=100`);
+function readCandidateWorkflowHistory(repository, runId, options) {
+  return readWorkflowJobPages(
+    repository,
+    `actions/runs/${runId}/jobs?filter=all&per_page=100`,
+    options,
+  );
 }
 
-function readWorkflowJobPages(repository, path) {
+function readWorkflowJobPages(repository, path, options) {
   const pages = runGhJson(repository, path, "full release candidate workflow jobs", {
+    ...options,
     paginate: true,
   });
   if (
@@ -584,7 +671,7 @@ function readWorkflowJobPages(repository, path) {
   return { jobs, total_count: pages[0].total_count };
 }
 
-function readRepositoryArtifacts(repository, requestSha256) {
+function readRepositoryArtifacts(repository, requestSha256, options) {
   const artifacts = [];
   const name = encodeURIComponent(fullReleaseCandidateArtifactName(requestSha256));
   for (let page = 1; page <= MAX_ARTIFACT_PAGES; page += 1) {
@@ -592,6 +679,7 @@ function readRepositoryArtifacts(repository, requestSha256) {
       repository,
       `actions/artifacts?name=${name}&per_page=100&page=${page}`,
       "full release candidate artifact listing",
+      options,
     );
     if (!Array.isArray(response.artifacts)) {
       fail("full release candidate artifact listing is invalid");
@@ -601,7 +689,7 @@ function readRepositoryArtifacts(repository, requestSha256) {
       return artifacts;
     }
   }
-  return fail("full release candidate artifact listing exceeded the bounded page limit");
+  return null;
 }
 
 function readJson(path, label) {
@@ -644,8 +732,21 @@ async function discover(args) {
   output("request_json", contract.requestJson);
   output("request_sha256", contract.requestSha256);
   let selected;
+  const ghOptions = {
+    attempts: CANDIDATE_GH_RETRY_ATTEMPTS,
+    timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
+  };
   try {
-    const artifacts = readRepositoryArtifacts(contract.request.repository, contract.requestSha256);
+    const artifacts = readRepositoryArtifacts(
+      contract.request.repository,
+      contract.requestSha256,
+      ghOptions,
+    );
+    if (artifacts === null) {
+      output("reused", "false");
+      output("reuse_reason", "candidate artifact inventory exceeded the bounded scan");
+      return;
+    }
     selected = await selectTrustedFullReleaseCandidate({
       artifacts,
       request: contract.request,
@@ -654,9 +755,10 @@ async function discover(args) {
           contract.request.repository,
           `actions/runs/${runId}`,
           "full release candidate workflow run",
+          ghOptions,
         ),
       readWorkflowJobs: async (runId) =>
-        readCandidateWorkflowHistory(contract.request.repository, runId),
+        readCandidateWorkflowHistory(contract.request.repository, runId, ghOptions),
     });
   } catch (error) {
     if (classifyReleaseGhTransportError(error) !== "transient") {
@@ -671,19 +773,43 @@ async function discover(args) {
     output("reuse_reason", "no trusted exact candidate artifact");
     return;
   }
-  const binding = await loadSelectedFullReleaseCandidate({
-    readRunAttempt: async (runId, runAttempt) =>
-      runGhJson(
-        contract.request.repository,
-        `actions/runs/${runId}/attempts/${runAttempt}`,
-        "full release candidate workflow attempt",
-      ),
-    readWorkflowJobs: async (runId, runAttempt) =>
-      readCandidateWorkflowJobs(contract.request.repository, runId, runAttempt),
-    request: contract.request,
-    selected,
-    token,
-  });
+  let binding;
+  try {
+    binding = await loadSelectedFullReleaseCandidate({
+      downloadArchive: (params) =>
+        downloadExactActionsArtifactArchive({
+          ...params,
+          retryAttempts: CANDIDATE_GH_RETRY_ATTEMPTS,
+          timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
+        }),
+      readArtifact: async (artifactId) =>
+        runGhJson(
+          contract.request.repository,
+          `actions/artifacts/${artifactId}`,
+          "full release candidate constituent artifact",
+          ghOptions,
+        ),
+      readRunAttempt: async (runId, runAttempt) =>
+        runGhJson(
+          contract.request.repository,
+          `actions/runs/${runId}/attempts/${runAttempt}`,
+          "full release candidate workflow attempt",
+          ghOptions,
+        ),
+      readWorkflowJobs: async (runId, runAttempt) =>
+        readCandidateWorkflowJobs(contract.request.repository, runId, runAttempt, ghOptions),
+      request: contract.request,
+      selected,
+      token,
+    });
+  } catch (error) {
+    if (!(error instanceof CandidateConstituentUnavailableError)) {
+      throw error;
+    }
+    output("reused", "false");
+    output("reuse_reason", error.message);
+    return;
+  }
   output("reused", "true");
   output("reuse_reason", "trusted exact candidate artifact");
   output("binding_json", JSON.stringify(binding));
@@ -711,6 +837,10 @@ async function verify(args) {
     fail("GH_TOKEN is required");
   }
   const binding = validateCandidateBinding(plan.candidate);
+  const ghOptions = {
+    attempts: CANDIDATE_GH_RETRY_ATTEMPTS,
+    timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
+  };
   await verifySealedFullReleaseCandidate({
     binding,
     consumerRunAttempt: option(args, "--consumer-run-attempt"),
@@ -720,15 +850,23 @@ async function verify(args) {
         binding.request.repository,
         `actions/artifacts/${artifactId}`,
         "sealed full release candidate artifact",
+        ghOptions,
       ),
     readRunAttempt: async (runId, runAttempt) =>
       runGhJson(
         binding.request.repository,
         `actions/runs/${runId}/attempts/${runAttempt}`,
         "sealed full release candidate workflow attempt",
+        ghOptions,
       ),
     readWorkflowJobs: async (runId, runAttempt) =>
-      readCandidateWorkflowJobs(binding.request.repository, runId, runAttempt),
+      readCandidateWorkflowJobs(binding.request.repository, runId, runAttempt, ghOptions),
+    downloadArchive: (params) =>
+      downloadExactActionsArtifactArchive({
+        ...params,
+        retryAttempts: CANDIDATE_GH_RETRY_ATTEMPTS,
+        timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
+      }),
     token,
   });
 }

@@ -19,6 +19,7 @@ export function loadSelectedFullReleaseCandidate(input: {
   downloadArchive?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   fetchImpl?: typeof fetch;
   now?: number;
+  readArtifact: (artifactId: string) => Promise<unknown>;
   readRunAttempt: (runId: string, runAttempt: string) => Promise<unknown>;
   readWorkflowJobs: (runId: string, runAttempt: string) => Promise<unknown>;
   request: FullReleaseCandidateRequest;
