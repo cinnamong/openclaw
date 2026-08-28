@@ -9333,6 +9333,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let model: String?
     public let contextwindow: String?
     public let thinkinglevel: String?
+    public let fastmode: AnyCodable?
     public let permissionmode: SessionPermissionMode?
     public let tooloverrides: [String: AnyCodable]?
     public let incognito: Bool?
@@ -9364,6 +9365,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         model: String? = nil,
         contextwindow: String? = nil,
         thinkinglevel: String? = nil,
+        fastmode: AnyCodable? = nil,
         permissionmode: SessionPermissionMode? = nil,
         tooloverrides: [String: AnyCodable]? = nil,
         incognito: Bool? = nil,
@@ -9394,6 +9396,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.model = model
         self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
+        self.fastmode = fastmode
         self.permissionmode = permissionmode
         self.tooloverrides = tooloverrides
         self.incognito = incognito
@@ -9426,6 +9429,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case model
         case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
+        case fastmode = "fastMode"
         case permissionmode = "permissionMode"
         case tooloverrides = "toolOverrides"
         case incognito
