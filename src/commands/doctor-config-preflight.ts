@@ -172,7 +172,7 @@ export async function runDoctorConfigPreflight(
     });
     // Another process may have completed the same work between our pre-lease read and acquisition.
     // Refresh every checkpoint input under the lease so only work still missing from state runs.
-    configSnapshotRead = await readConfigSnapshotForPreflight();
+    configSnapshotRead = await readConfigSnapshotForPreflight(false);
     const latestBaseConfig =
       configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {};
     migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
@@ -330,7 +330,7 @@ export async function runDoctorConfigPreflight(
           commitUpgradeConfigRepair(automaticUpgradeRepair, preflightSnapshot),
         );
         note("Removed stable upgrade config keys before state migration.", "Doctor changes");
-        configSnapshotRead = await readConfigSnapshotForPreflight();
+        configSnapshotRead = await readConfigSnapshotForPreflight(false);
         const repairedBaseConfig =
           configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {};
         migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
@@ -372,7 +372,7 @@ export async function runDoctorConfigPreflight(
     if (!configSnapshotRead || stateMigrations) {
       // Legacy state migration can move the persisted plugin index into the canonical state root.
       // Re-read before config-dependent migrations so their checkpoint names that final inventory.
-      configSnapshotRead = await readConfigSnapshotForPreflight();
+      configSnapshotRead = await readConfigSnapshotForPreflight(!stateMigrations);
     }
 
     let snapshot = configSnapshotRead.snapshot;
@@ -382,7 +382,7 @@ export async function runDoctorConfigPreflight(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
-        configSnapshotRead = await readConfigSnapshotForPreflight();
+        configSnapshotRead = await readConfigSnapshotForPreflight(false);
         snapshot = configSnapshotRead.snapshot;
       } else if (
         await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
@@ -391,7 +391,7 @@ export async function runDoctorConfigPreflight(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
           "Config",
         );
-        configSnapshotRead = await readConfigSnapshotForPreflight();
+        configSnapshotRead = await readConfigSnapshotForPreflight(false);
         snapshot = configSnapshotRead.snapshot;
       }
       if (

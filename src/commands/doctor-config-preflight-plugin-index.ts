@@ -5,6 +5,13 @@ import {
 } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  getPluginMetadataSnapshotCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
@@ -36,34 +43,39 @@ export async function readDoctorConfigPreflightSnapshot(params: {
   preparePluginMetadataSnapshot: boolean;
   skipPluginValidation: boolean;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
-  const sharedOptions = {
-    ...(params.observe === false ? { observe: false } : {}),
-    ...(params.measure ? { measure: params.measure } : {}),
-    ...(params.allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
-  };
-  if (params.includePluginMetadata && !params.skipPluginValidation) {
-    const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
-    const pluginMetadataSnapshot = params.preparePluginMetadataSnapshot
-      ? completeDoctorPluginMetadataSnapshot({
-          snapshot: result.pluginMetadataSnapshot,
-          config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
-        })
-      : result.pluginMetadataSnapshot;
-    return {
-      snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
-      pluginMigrationFingerprint: pluginMetadataSnapshot?.configFingerprint?.trim() || null,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  // Explicit management rereads cross a lease or mutation boundary. A resolver's
+  // allowCurrent:false still reuses facts within an existing operation generation.
+  const cache = params.allowCurrentPluginMetadata ? getPluginCache() : createPluginCache();
+  return withPluginCache(cache, async () => {
+    const sharedOptions = {
+      ...(params.observe === false ? { observe: false } : {}),
+      ...(params.measure ? { measure: params.measure } : {}),
+      ...(params.allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
     };
-  }
-  return {
-    snapshot: addDoctorLegacyIssues(
-      await readConfigFileSnapshot({
-        ...sharedOptions,
-        skipPluginValidation: params.skipPluginValidation,
-      }),
-    ),
-    pluginMigrationFingerprint: null,
-  };
+    if (params.includePluginMetadata && !params.skipPluginValidation) {
+      const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
+      const pluginMetadataSnapshot = params.preparePluginMetadataSnapshot
+        ? completeDoctorPluginMetadataSnapshot({
+            snapshot: result.pluginMetadataSnapshot,
+            config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
+          })
+        : result.pluginMetadataSnapshot;
+      return {
+        snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
+        pluginMigrationFingerprint: pluginMetadataSnapshot?.configFingerprint?.trim() || null,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      };
+    }
+    return {
+      snapshot: addDoctorLegacyIssues(
+        await readConfigFileSnapshot({
+          ...sharedOptions,
+          skipPluginValidation: params.skipPluginValidation,
+        }),
+      ),
+      pluginMigrationFingerprint: null,
+    };
+  });
 }
 
 export function needsRefreshedPluginIndexPersistence(
@@ -91,10 +103,20 @@ export async function persistRefreshedPluginIndex(params: {
     "plugin-index-store-import",
     loadInstalledPluginIndexStoreWrite,
   );
-  // The checkpoint certifies the persisted inventory, not a process-local replacement.
-  // Write the exact derived index first, then prove a fresh reader can reuse it.
+  // The config-wide aggregate is for validation; its index header names only one scope.
+  // Persist that original leaf in the post-lease producer, not the invoking generation.
+  const index = withPluginCache(
+    getPluginMetadataSnapshotCache(derivedPluginMetadataSnapshot),
+    () =>
+      resolvePluginMetadataSnapshot({
+        config: params.snapshotRead.snapshot.sourceConfig ?? params.snapshotRead.snapshot.config,
+        env: params.env,
+        workspaceDir: derivedPluginMetadataSnapshot.index.workspaceDir,
+        allowCurrent: false,
+      }).index,
+  );
   await params.measure("plugin-index-persistence", () =>
-    writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.index, {
+    writePersistedInstalledPluginIndexWithLeaseSync(index, {
       env: params.env,
       lease,
     }),
