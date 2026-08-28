@@ -49,6 +49,7 @@ import {
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { AgentToolGatewayRequestCaller } from "./tools/in-process-gateway.js";
 import { resolveSessionToolAccess } from "./tools/sessions-access.js";
+import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
   const sessionKey = String(payload.sessionKey);
@@ -308,6 +309,68 @@ describe("subagent orphan recovery — faithful restart path", () => {
       });
       expect(access).toMatchObject({ allowed: true });
     }
+  });
+
+  it("stops a denied spawnedBy-only sender before any agent dispatch", async () => {
+    const now = Date.now();
+    const parentSessionKey = "agent:main:legacy-parent";
+    const childSessionKey = "agent:main:subagent:controlled-child";
+    // Legacy row: spawnedBy only, no parentSessionKey. Another session's live
+    // run controls the child, so the spawner must be denied at the tool
+    // boundary — before sessions_send can reach the gateway "agent" dispatch.
+    await writeSubagentSessionEntry({
+      stateDir: tempStateDir!,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-controlled-child",
+      updatedAt: now,
+      defaultSessionId: "sess-controlled-child",
+      spawnedBy: parentSessionKey,
+    });
+    addSubagentRunForTests(
+      makeRunRecord({
+        runId: "run-foreign-controller",
+        childSessionKey,
+        requesterSessionKey: "agent:main:other-controller",
+        controllerSessionKey: "agent:main:other-controller",
+        requesterDisplayKey: "other-controller",
+        createdAt: now - 60_000,
+        startedAt: now - 55_000,
+      }),
+    );
+
+    const gatewayMethods: string[] = [];
+    const callGateway: AgentToolGatewayRequestCaller = async ({ method, params }) => {
+      gatewayMethods.push(method);
+      if (method !== "sessions.resolve") {
+        throw new Error(`denied sessions_send reached gateway method: ${method}`);
+      }
+      const resolved = await resolveSessionKeyFromResolveParams({
+        cfg: getRuntimeConfig(),
+        client: null,
+        p: params as never,
+      });
+      if (!resolved.ok) {
+        throw new Error(resolved.error.message);
+      }
+      return ("missing" in resolved ? { ok: false } : resolved) as never;
+    };
+    const sendTool = createSessionsSendTool({
+      agentSessionKey: parentSessionKey,
+      config: getRuntimeConfig(),
+      callGateway,
+    });
+    const result = (await sendTool.execute("send-denied", {
+      sessionKey: childSessionKey,
+      message: "should never dispatch",
+    })) as { content?: Array<{ type?: string; text?: string }> };
+    const text = result.content?.find((part) => part.type === "text")?.text ?? "";
+    const payload = JSON.parse(text) as { status?: string; error?: string };
+    expect(payload.status).toBe("forbidden");
+    expect(payload.error).toContain("restricted to the current session tree");
+    // The denial happened before dispatch: only resolver lookups reached the
+    // gateway, never the "agent" run method.
+    expect(gatewayMethods.every((method) => method === "sessions.resolve")).toBe(true);
   });
 
   it("preserves an accepted response across a consumed-receipt write failure", async () => {
