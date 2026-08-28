@@ -236,6 +236,168 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
+  fun producerTruncationFactsRecoverRepliesAtASurrogateBoundary() {
+    val prefix = "x".repeat(7_999)
+    val suffix = "\n...(truncated)..."
+    val complete = prefix + "😀 The actual ending."
+    val response = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
+    val message = response.getValue("message").jsonObject
+    gateway.fullResponseOverride = JsonObject(response + ("message" to JsonObject(message + ("content" to JsonPrimitive(complete)))))
+    listOf(false, true).forEachIndexed { index, structural ->
+      gateway.emitTruncationMarker = structural
+      // Released raw slicing retains one high surrogate; current safe slicing drops it
+      // but records truncated=true. A markerless 8,017-unit literal stays a negative above.
+      gateway.historyTextOverride = prefix + (if (structural) "" else "\uD83D") + suffix
+      refreshSelectedChat()
+      viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+      awaitExpanded(complete)
+      assertEquals(index + 1, gateway.fullReads.size)
+      composeRule.onNodeWithText("Close").performClick()
+      assertNativeReaderAbsent()
+    }
+  }
+
+  @Test
+  fun messageToolMirrorKeepsItsPreviewWithoutCanonicalRecovery() {
+    gateway.historyMessageToolMirror = true
+    refreshSelectedChat()
+    assertEquals(
+      FULL_MESSAGE_ENTRY,
+      runtime.chatMessages.value
+        .single()
+        .entryId,
+    )
+    viewAll().assertDoesNotExist()
+    assertNull(runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()))
+    assertTrue(gateway.fullReads.isEmpty())
+  }
+
+  @Test
+  fun preparedReadCannotDispatchAfterItsPreviewBecomesAMessageToolMirror() {
+    val prepared = prepareCurrentRead()
+    gateway.historyMessageToolMirror = true
+    refreshSelectedChat()
+    runBlocking { prepared.execute() }
+    assertEquals("A borrowed transcript ID must not authorize a canonical read", emptyList<FullMessageRead>(), gateway.fullReads.toList())
+    assertEquals(ChatFullMessageState.Loading, prepared.state.value)
+    viewAll().assertDoesNotExist()
+  }
+
+  @Test
+  fun loadedReaderRetiresWhenItsPreviewBecomesAMessageToolMirror() {
+    viewAll().performClick()
+    awaitExpanded()
+    gateway.historyMessageToolMirror = true
+    refreshSelectedChat()
+    assertNativeReaderAbsent()
+    composeRule.onNodeWithText("Close").assertDoesNotExist()
+    viewAll().assertDoesNotExist()
+    assertEquals(1, gateway.fullReads.size)
+    gateway.historyMessageToolMirror = false
+    refreshSelectedChat()
+    viewAll().assertIsDisplayed().performClick()
+    awaitExpanded()
+    assertEquals("Restoring a canonical row must not revive its retired cache", 2, gateway.fullReads.size)
+  }
+
+  @Test
+  fun inFlightResponseCannotPublishAfterItsPreviewBecomesAMessageToolMirror() =
+    runBlocking {
+      val selection = runtime.chatSelectionGeneration.value
+      val catalog = runtime.gatewayCatalogRevision.value
+      val connection = gateway.operatorConnection.get()
+      gateway.holdFullResponses = true
+      val oldRead = prepareCurrentRead()
+      val pending = async(Dispatchers.IO) { oldRead.execute() }
+      try {
+        withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.heldResponses.first { it.isNotEmpty() } }
+        gateway.historyMessageToolMirror = true
+        refreshSelectedChat()
+        assertEquals(selection, runtime.chatSelectionGeneration.value)
+        assertEquals(catalog, runtime.gatewayCatalogRevision.value)
+        assertEquals(connection, gateway.operatorConnection.get())
+        assertEquals(
+          FULL_MESSAGE_ENTRY,
+          runtime.chatMessages.value
+            .single()
+            .entryId,
+        )
+        gateway.releaseFullResponses()
+        withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { pending.await() }
+        val retiredResult = oldRead.state.value
+
+        gateway.historyMessageToolMirror = false
+        refreshSelectedChat()
+        val current = prepareCurrentRead()
+        current.execute()
+        assertEquals(gateway.fullText(FULL_MESSAGE_FIRST_CHAT), loadedText(current.state.value))
+        assertEquals(listOf(expectedRequest(), expectedRequest()), gateway.fullReads.toList())
+        assertEquals("Mirror provenance must retire publication even when the selection and socket remain current", ChatFullMessageState.Loading, retiredResult)
+      } finally {
+        gateway.releaseFullResponses()
+        pending.cancelAndJoin()
+      }
+    }
+
+  @Test
+  fun retainedLoadedDisclosureCannotReopenAfterMirrorRefreshBeforeRecomposition() {
+    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+    awaitExpanded()
+    composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
+    assertNativeReaderAbsent()
+    val oldAction =
+      checkNotNull(
+        viewAll()
+          .assertIsDisplayed()
+          .assertIsEnabled()
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+    val selection = runtime.chatSelectionGeneration.value
+    val catalog = runtime.gatewayCatalogRevision.value
+    val connection = gateway.operatorConnection.get()
+    val previousHistoryCount = gateway.historyReads.value.size
+    gateway.historyMessageToolMirror = true
+    composeRule.runOnIdle {
+      // Refresh commits on runtime IO while Main remains occupied, as in the existing
+      // retained-action tests. Do not pump Compose before replaying the old callback.
+      model.refreshChat()
+      awaitRuntimeReady(FULL_MESSAGE_FIRST_CHAT)
+      assertTrue(
+        gateway.historyReads.value
+          .drop(previousHistoryCount)
+          .contains(connection to FULL_MESSAGE_FIRST_CHAT),
+      )
+      assertEquals(selection, runtime.chatSelectionGeneration.value)
+      assertEquals(catalog, runtime.gatewayCatalogRevision.value)
+      assertEquals(connection, gateway.operatorConnection.get())
+      assertEquals(
+        FULL_MESSAGE_ENTRY,
+        runtime.chatMessages.value
+          .single()
+          .entryId,
+      )
+      assertTrue(oldAction())
+    }
+    composeRule.waitForIdle()
+    assertNativeReaderAbsent()
+    composeRule.onNodeWithText("Close").assertDoesNotExist()
+    viewAll().assertDoesNotExist()
+    // A subsequent same-socket history response orders the absence check.
+    refreshSelectedChat()
+    assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
+
+    gateway.historyMessageToolMirror = false
+    refreshSelectedChat()
+    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
+    awaitExpanded()
+    assertEquals("A fresh canonical row must request again rather than revive the retired cache", listOf(expectedRequest(), expectedRequest()), gateway.fullReads.toList())
+    composeRule.onNodeWithText("Close").assertIsDisplayed().performClick()
+    assertNativeReaderAbsent()
+  }
+
+  @Test
   fun stableFullResponseUsesItsOwnCapInsteadOfTheHistoryCap() =
     runBlocking {
       gateway.emitTruncationMarker = false
@@ -778,6 +940,7 @@ class ChatFullMessageOwnershipLayoutTest {
         JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive("another-entry")) })))),
         JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive(12)) })))),
         JsonObject(valid + ("message" to JsonObject(validMessage + ("content" to JsonPrimitive(""))))),
+        JsonObject(valid + ("message" to JsonObject(validMessage + ("openclawMessageToolMirror" to buildJsonObject { put("toolName", JsonPrimitive("message")) })))),
       )
     variants.forEachIndexed { index, payload ->
       if (index > 0) selectChat(if (index % 2 == 0) FULL_MESSAGE_FIRST_CHAT else FULL_MESSAGE_SECOND_CHAT)
@@ -1281,6 +1444,8 @@ internal class FullMessageGateway : AutoCloseable {
 
   @Volatile var historyTruncated = true
 
+  @Volatile var historyMessageToolMirror = false
+
   @Volatile var emitTruncationMarker = true
 
   @Volatile var contentAsBlocks = false
@@ -1412,7 +1577,7 @@ internal class FullMessageGateway : AutoCloseable {
                   "messages",
                   JsonArray(
                     buildList {
-                      add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session)))
+                      add(message(session, truncated = historyTruncated, role = historyRole, text = historyText(session), mirror = historyMessageToolMirror))
                       repeat(historyAppendCount) { index ->
                         add(
                           buildJsonObject {
@@ -1454,7 +1619,14 @@ internal class FullMessageGateway : AutoCloseable {
             put("id", id)
             put("ok", JsonPrimitive(true))
             put("payload", payload)
-          }.toString()
+          }.toString().let { serialized ->
+            // Match JSON.stringify's escaped lone surrogates; UTF-8 encoding otherwise replaces them.
+            buildString {
+              serialized.forEach { char ->
+                if (char.isSurrogate()) append("\\u" + char.code.toString(16).padStart(4, '0')) else append(char)
+              }
+            }
+          }
         if (method == "chat.message.get" && holdFullResponses) {
           heldResponses.update {
             it + {
@@ -1472,8 +1644,12 @@ internal class FullMessageGateway : AutoCloseable {
     truncated: Boolean,
     role: String = "assistant",
     text: String = if (truncated) preview(session) else fullText(session),
+    mirror: Boolean = false,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
+    if (mirror) {
+      put("openclawMessageToolMirror", buildJsonObject { put("toolName", JsonPrimitive("message")) })
+    }
     put(
       "content",
       if (contentAsBlocks) {

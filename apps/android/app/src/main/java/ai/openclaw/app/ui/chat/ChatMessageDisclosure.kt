@@ -35,12 +35,6 @@ private class ChatMessageDisclosureRead(
   val read: ChatController.FullMessageRead,
 ) {
   var job: Job? = null
-
-  fun matches(candidate: ChatMessage): Boolean =
-    candidate.role == "assistant" &&
-      candidate.truncated &&
-      candidate.entryId == message.entryId &&
-      candidate.content == message.content
 }
 
 @Composable
@@ -58,7 +52,7 @@ internal fun ChatMessageDisclosure(
   var selected by remember(scope) { mutableStateOf<ChatMessageDisclosureRead?>(null) }
   var expanded by remember(scope) { mutableStateOf(false) }
   val selection = selected
-  val active = selection?.takeIf { messages.any(it::matches) }
+  val active = selection?.takeIf { messages.any(it.message::matchesFullRead) }
   if (selection != null && active == null) {
     SideEffect {
       // Removal or a changed preview retires the cache permanently, even if reinserted later.
@@ -84,7 +78,7 @@ internal fun ChatMessageDisclosure(
   ) {
     // Admission happens in the tap, before queued coroutine work can outlive this render.
     val admitted = prepareRead(message) ?: return
-    if (retry || selected?.matches(message) != true) {
+    if (retry || selected?.message?.matchesFullRead(message) != true) {
       selected?.job?.cancel()
       val next = ChatMessageDisclosureRead(message, admitted)
       selected = next
@@ -105,7 +99,7 @@ internal fun ChatMessageDisclosure(
   }
 
   content { message ->
-    if (message.role == "assistant" && message.truncated && !message.entryId.isNullOrBlank()) {
+    if (message.canReadFullMessage) {
       ChatMessageDisclosureButton(nativeString("View all")) { open(message) }
     }
   }

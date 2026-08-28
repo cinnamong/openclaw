@@ -30,10 +30,18 @@ data class ChatMessage(
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
   val truncated: Boolean = false,
+  val isMessageToolMirror: Boolean = false,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
-)
+) {
+  // Synthetic display mirrors borrow a transcript ID, not that entry's canonical text.
+  // Keep the ID for timeline actions, but never use it to recover or retain full text.
+  internal val canReadFullMessage: Boolean
+    get() = role == "assistant" && truncated && !isMessageToolMirror && !entryId.isNullOrBlank()
+
+  internal fun matchesFullRead(other: ChatMessage): Boolean = canReadFullMessage && other.canReadFullMessage && entryId == other.entryId && content == other.content
+}
 
 internal sealed interface ChatFullMessageState {
   data object Loading : ChatFullMessageState

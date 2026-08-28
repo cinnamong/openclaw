@@ -1587,15 +1587,7 @@ class ChatController internal constructor(
     isCurrentSessionAction(snapshot) &&
       isCurrentComposerOwner(owner) &&
       catalogRevision == currentGatewayCatalogRevision() &&
-      message.role == "assistant" &&
-      message.truncated &&
-      !message.entryId.isNullOrBlank() &&
-      _messages.value.any {
-        it.entryId == message.entryId &&
-          it.role == message.role &&
-          it.content == message.content &&
-          it.truncated == message.truncated
-      }
+      _messages.value.any(message::matchesFullRead)
 
   /** The admitted read owns its outcome; nothing is published through a retained UI callback. */
   internal inner class FullMessageRead internal constructor(
@@ -1676,6 +1668,7 @@ class ChatController internal constructor(
       return ChatFullMessageState.Failed
     }
     val parsed = parseMessage(obj, FULL_MESSAGE_TEXT_MAX_CHARS) ?: return ChatFullMessageState.Failed
+    if (parsed.isMessageToolMirror) return ChatFullMessageState.Failed
     // The canonical get projection is bounded too; ok:true does not promise complete text.
     if (parsed.truncated) return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.TooLarge)
     if (parsed.content.none { it.type == "text" && !it.text.isNullOrBlank() }) {
@@ -6751,6 +6744,7 @@ class ChatController internal constructor(
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
       entryId = metadata?.get("id").asJsonStringOrNull(),
+      isMessageToolMirror = obj["openclawMessageToolMirror"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||
           (truncated == null && content.any { it.type == "text" && it.text?.length == maxChars + legacySuffix.length && it.text.endsWith(legacySuffix) }),
