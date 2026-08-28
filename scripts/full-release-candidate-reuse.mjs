@@ -42,6 +42,7 @@ function fail(message) {
 
 class CandidateConstituentUnavailableError extends Error {}
 class CandidateDiscoveryBudgetError extends Error {}
+class CandidateEvaluationLimitError extends Error {}
 
 function requireDiscoveryBudget(deadlineMs) {
   if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
@@ -212,9 +213,8 @@ export async function selectTrustedFullReleaseCandidate({
       candidateArtifactMetadata(artifact, expectedName, validatedRequest.toolingSha, now),
     )
     .filter(Boolean)
-    .toSorted(newestCandidateFirst)
-    .slice(0, MAX_CANDIDATES_TO_EVALUATE);
-  for (const candidate of candidates) {
+    .toSorted(newestCandidateFirst);
+  for (const candidate of candidates.slice(0, MAX_CANDIDATES_TO_EVALUATE)) {
     requireDiscoveryBudget(deadlineMs);
     let run;
     try {
@@ -244,6 +244,9 @@ export async function selectTrustedFullReleaseCandidate({
     if (hasTrustedCandidatePublisher(workflowJobs, candidate, validatedRequest)) {
       return selected;
     }
+  }
+  if (candidates.length > MAX_CANDIDATES_TO_EVALUATE) {
+    throw new CandidateEvaluationLimitError("candidate evaluation exceeded the bounded scan");
   }
   return null;
 }
@@ -800,7 +803,10 @@ async function discover(args) {
         readCandidateWorkflowHistory(contract.request.repository, runId, ghOptions),
     });
   } catch (error) {
-    if (error instanceof CandidateDiscoveryBudgetError) {
+    if (
+      error instanceof CandidateDiscoveryBudgetError ||
+      error instanceof CandidateEvaluationLimitError
+    ) {
       output("state", "unavailable");
       output("reused", "false");
       output("reuse_reason", error.message);
