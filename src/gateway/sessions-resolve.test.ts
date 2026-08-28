@@ -138,7 +138,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
     await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
   });
 
-  it("keeps durable spawn lineage authoritative when a live run is controlled elsewhere", async () => {
+  it("denies a spawnedBy-only row while a different live controller owns the child", async () => {
+    // Live control supersedes the stale spawnedBy fact; explicit
+    // parentSessionKey lineage (below) is unaffected.
     targetStore = {
       [canonicalKey]: {
         sessionId: "sess-steered-child",
@@ -158,9 +160,69 @@ describe("resolveSessionKeyFromResolveParams", () => {
       }),
     );
     try {
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg: {},
+          p: { key: canonicalKey, spawnedBy: "controller-1", allowMissing: true },
+        }),
+      ).resolves.toEqual({ ok: true, missing: true });
+    } finally {
+      subagentRuns.delete("run-steered");
+    }
+  });
+
+  it("keeps parentSessionKey lineage authoritative when a live run is controlled elsewhere", async () => {
+    targetStore = {
+      [canonicalKey]: {
+        sessionId: "sess-steered-child",
+        parentSessionKey: "controller-1",
+        updatedAt: Date.now(),
+      },
+    };
+    subagentRuns.set(
+      "run-steered",
+      createSubagentRunRecord({
+        runId: "run-steered",
+        childSessionKey: canonicalKey,
+        requesterSessionKey: "agent:main:other",
+        controllerSessionKey: "agent:main:other",
+        requesterDisplayKey: "other",
+        startedAt: Date.now(),
+      }),
+    );
+    try {
       await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
     } finally {
       subagentRuns.delete("run-steered");
+    }
+  });
+
+  it("restores spawnedBy-only authority once no live run controls the child", async () => {
+    // A retained terminal record from another controller must not keep
+    // superseding the spawner after control ends.
+    targetStore = {
+      [canonicalKey]: {
+        sessionId: "sess-released-child",
+        spawnedBy: "controller-1",
+        updatedAt: Date.now(),
+      },
+    };
+    subagentRuns.set(
+      "run-released",
+      createSubagentRunRecord({
+        runId: "run-released",
+        childSessionKey: canonicalKey,
+        requesterSessionKey: "agent:main:other",
+        controllerSessionKey: "agent:main:other",
+        requesterDisplayKey: "other",
+        startedAt: Date.now() - 10 * 60_000,
+        endedAt: Date.now() - 5 * 60_000,
+      }),
+    );
+    try {
+      await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
+    } finally {
+      subagentRuns.delete("run-released");
     }
   });
 

@@ -24,7 +24,6 @@ import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolutio
 import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { isDirectChildSessionEntry } from "./session-child-sessions.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 import {
@@ -87,7 +86,8 @@ function validateSessionAgentExists(
  * Durable parent linkage on the stored entry — or the controller of a live
  * run — authorizes regardless of the display liveness windows that bound
  * child listings, so a recovered or long-ended child stays reachable to its
- * parent. Retained terminal or snapshot run records confer no authority.
+ * parent. Live control supersedes a spawnedBy-only relationship, and
+ * retained terminal or snapshot run records confer no authority.
  */
 function isResolvedSessionKeyOwnedBySpawner(params: {
   p: SessionsResolveParams;
@@ -98,26 +98,29 @@ function isResolvedSessionKeyOwnedBySpawner(params: {
   if (!spawnedBy) {
     return true;
   }
-  // spawnedBy/parentSessionKey are immutable spawn facts and already expose
-  // the child to this parent in listings, so they stay authoritative even
-  // while another session's live run controls the child.
-  if (
-    isDirectChildSessionEntry({
-      sessionKey: params.key,
-      entry: params.store[params.key],
-      parentKey: spawnedBy,
-    })
-  ) {
+  if (params.key === spawnedBy) {
+    return false;
+  }
+  const entry = params.store[params.key];
+  // parentSessionKey is explicit navigation lineage, written on every modern
+  // spawn, and stays authoritative even while another session's live run
+  // controls the child.
+  if (normalizeOptionalString(entry?.parentSessionKey) === spawnedBy) {
     return true;
   }
   const run = getSessionDisplaySubagentRunByChildSessionKey(params.key);
-  if (!run || !isLiveUnendedSubagentRun(run)) {
-    return false;
+  const liveController =
+    run && isLiveUnendedSubagentRun(run)
+      ? (normalizeOptionalString(run.controllerSessionKey) ??
+        normalizeOptionalString(run.requesterSessionKey))
+      : undefined;
+  if (liveController === spawnedBy) {
+    return true;
   }
-  const controller =
-    normalizeOptionalString(run.controllerSessionKey) ??
-    normalizeOptionalString(run.requesterSessionKey);
-  return controller === spawnedBy;
+  // Legacy spawnedBy-only rows: live control by another session supersedes
+  // the stale spawn fact; once no live run controls the child, the immutable
+  // spawn relationship is authoritative again.
+  return liveController === undefined && normalizeOptionalString(entry?.spawnedBy) === spawnedBy;
 }
 
 function findVisibleSessionIdMatches(params: {
