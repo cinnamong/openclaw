@@ -23,7 +23,7 @@ predicate rawConnectMember(string memberName) { memberName = ["connect", "create
 predicate relevantSourceFile(File file) {
   exists(string path |
     path = file.getRelativePath() and
-    path.regexpMatch("^(src|extensions)/.*\\.ts$") and
+    path.regexpMatch("^(src|extensions|packages/net-policy/src)/.*\\.ts$") and
     not path.regexpMatch(".*\\.(test|spec|test-utils|test-harness|e2e-harness)\\.ts$") and
     not path.regexpMatch(".*/test-support/.*") and
     not path.regexpMatch("^extensions/diffs/assets/.*")

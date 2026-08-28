@@ -208,7 +208,7 @@ jobs:
           else
             while IFS= read -r file; do
               case "${file}" in
-                .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql)
+                .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql|.github/codeql/openclaw-boundary/tests/network-runtime/*)
                   network_runtime=true
                   ;;
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
@@ -471,27 +471,35 @@ jobs:
             | "\($file): \(.)"
           ' > "$raw_socket_scan_lines"
 
-          # Query/config edits need semantic analysis; the fast diff scan cannot validate QL.
+          # Query/config/fixture edits need semantic analysis; the diff scan cannot validate QL.
           # The Codex transport also has an exact owner/function allowlist in the query.
+          # Sensitive added lines select the same gate; failing here would skip it.
           if grep -Eq "$network_codeql_contract_pattern" "$changed_files" || \
-             grep -Fxq "$codex_transport" "$changed_files"; then
+             grep -Eq '^\.github/codeql/openclaw-boundary/tests/network-runtime/' "$changed_files" || \
+             grep -Fxq "$codex_transport" "$changed_files" || \
+             grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' "$added_lines" || \
+             grep -En '(from|require\().*["'\''](node:)?(net|tls|http2)["'\'']|\b(net|tls|http2)\.(connect|createConnection)\b|new Socket\(' "$raw_socket_scan_lines"; then
+            echo "Network runtime boundary-sensitive added lines or contract edits require full CodeQL review." >&2
             echo "full_codeql=true" >> "$GITHUB_OUTPUT"
           else
             echo "full_codeql=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' "$added_lines" || \
-             grep -En '(from|require\().*["'\''](node:)?(net|tls|http2)["'\'']|\b(net|tls|http2)\.(connect|createConnection)\b|new Socket\(' "$raw_socket_scan_lines"; then
-            echo "Network runtime boundary-sensitive added lines require full CodeQL review." >&2
-            exit 1
-          fi
-
       - name: Initialize CodeQL
+        id: init-network-codeql
         if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
         uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-network-runtime-boundary-critical-quality.yml
+
+      - name: Test network boundary queries
+        if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
+        env:
+          CODEQL_PATH: ${{ steps.init-network-codeql.outputs.codeql-path }}
+        run: |
+          set -euo pipefail
+          "$CODEQL_PATH" test run .github/codeql/openclaw-boundary/tests/network-runtime
 
       - name: Analyze
         id: analyze
