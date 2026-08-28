@@ -763,30 +763,46 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
-  fun fullResponsesRequireTheCanonicalAssistantEntryAndReadableText() =
-    runBlocking {
-      val valid = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
-      val validMessage = valid.getValue("message").jsonObject
-      val variants =
-        listOf(
-          JsonObject(valid + ("ok" to JsonPrimitive("true"))),
-          JsonObject(valid + ("message" to JsonObject(validMessage + ("role" to JsonPrimitive("user"))))),
-          JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive("another-entry")) })))),
-          JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive(12)) })))),
-          JsonObject(valid + ("message" to JsonObject(validMessage + ("content" to JsonPrimitive(""))))),
-        )
-      variants.forEach { payload ->
-        gateway.fullResponseOverride = payload
-        val read = prepareCurrentRead()
-        read.execute()
-        assertEquals(ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable), read.state.value)
+  fun fullResponsesRequireTheCanonicalAssistantEntryAndReadableText() {
+    val valid = gateway.fullResponse(FULL_MESSAGE_FIRST_CHAT)
+    val validMessage = valid.getValue("message").jsonObject
+    val variants =
+      listOf(
+        JsonObject(emptyMap()),
+        buildJsonObject {
+          put("ok", JsonPrimitive(false))
+          put("unavailableReason", JsonPrimitive("unknown-reason"))
+        },
+        JsonObject(valid + ("ok" to JsonPrimitive("true"))),
+        JsonObject(valid + ("message" to JsonObject(validMessage + ("role" to JsonPrimitive("user"))))),
+        JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive("another-entry")) })))),
+        JsonObject(valid + ("message" to JsonObject(validMessage + ("__openclaw" to buildJsonObject { put("id", JsonPrimitive(12)) })))),
+        JsonObject(valid + ("message" to JsonObject(validMessage + ("content" to JsonPrimitive(""))))),
+      )
+    variants.forEachIndexed { index, payload ->
+      if (index > 0) selectChat(if (index % 2 == 0) FULL_MESSAGE_FIRST_CHAT else FULL_MESSAGE_SECOND_CHAT)
+      gateway.fullResponseOverride = payload
+      viewAll().assertIsDisplayed().performClick()
+      composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
+        composeRule.onAllNodes(hasText("The full message could not be loaded.")).fetchSemanticsNodes().isNotEmpty()
       }
+      assertNativeReaderAbsent()
+      composeRule.onNode(hasText("...(truncated)...", substring = true)).assertExists()
+      composeRule.onNodeWithText("Close").performClick()
       gateway.fullResponseOverride = null
-      val healthy = prepareCurrentRead()
-      healthy.execute()
-      assertEquals(gateway.fullText(FULL_MESSAGE_FIRST_CHAT), loadedText(healthy.state.value))
-      assertEquals(variants.size + 1, gateway.fullReads.size)
+      viewAll().assertIsDisplayed().performClick()
+      composeRule.onNodeWithText("The full message could not be loaded.").assertIsDisplayed()
+      assertEquals("Reopening a failure must not silently retry", index * 2 + 1, gateway.fullReads.size)
+      composeRule
+        .onNodeWithText("Retry")
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .performClick()
+      awaitExpanded()
+      assertEquals("Only the explicit Retry may recover the canonical answer", index * 2 + 2, gateway.fullReads.size)
+      composeRule.onNodeWithText("Close").performClick()
     }
+  }
 
   @Test
   fun closingFullReaderPreservesPreviewActionsAndCachedReopening() {

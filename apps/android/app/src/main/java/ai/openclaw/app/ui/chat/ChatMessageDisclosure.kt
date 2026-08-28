@@ -130,7 +130,6 @@ internal fun ChatMessageDisclosure(
                   ChatFullMessageUnavailable.Disconnected -> nativeString("Reconnect to load the full message.")
                   ChatFullMessageUnavailable.NotFound -> nativeString("The full message is no longer available.")
                   ChatFullMessageUnavailable.TooLarge -> nativeString("The full message is too large to display.")
-                  ChatFullMessageUnavailable.Unreadable -> nativeString("The full message could not be loaded.")
                 }
               ChatFullMessageState.Failed -> nativeString("The full message could not be loaded.")
               else -> nativeString("Loading full message…")

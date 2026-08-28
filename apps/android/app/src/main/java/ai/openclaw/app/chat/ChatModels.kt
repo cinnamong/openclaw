@@ -54,7 +54,6 @@ internal enum class ChatFullMessageUnavailable {
   Disconnected,
   NotFound,
   TooLarge,
-  Unreadable,
 }
 
 data class ChatMessageProvenance(

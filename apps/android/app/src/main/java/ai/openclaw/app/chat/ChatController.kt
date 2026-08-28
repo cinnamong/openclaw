@@ -1656,13 +1656,14 @@ class ChatController internal constructor(
   ): ChatFullMessageState {
     val root =
       runCatching { json.parseToJsonElement(payload).asObjectOrNull() }.getOrNull()
-        ?: return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
+        ?: return ChatFullMessageState.Failed
     if (root["ok"] == JsonPrimitive(false)) {
+      // Only protocol-defined reasons are terminal; malformed replies remain retryable.
       val reason =
         when (root["unavailableReason"].asJsonStringOrNull()) {
           "not_found", "not_visible" -> ChatFullMessageUnavailable.NotFound
           "oversized" -> ChatFullMessageUnavailable.TooLarge
-          else -> ChatFullMessageUnavailable.Unreadable
+          else -> return ChatFullMessageState.Failed
         }
       return ChatFullMessageState.Unavailable(reason)
     }
@@ -1672,13 +1673,13 @@ class ChatController internal constructor(
       obj["role"].asJsonStringOrNull() != "assistant" ||
       obj["__openclaw"].asObjectOrNull()?.get("id").asJsonStringOrNull() != entryId
     ) {
-      return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
+      return ChatFullMessageState.Failed
     }
-    val parsed = parseMessage(obj, FULL_MESSAGE_TEXT_MAX_CHARS) ?: return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
+    val parsed = parseMessage(obj, FULL_MESSAGE_TEXT_MAX_CHARS) ?: return ChatFullMessageState.Failed
     // The canonical get projection is bounded too; ok:true does not promise complete text.
     if (parsed.truncated) return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.TooLarge)
     if (parsed.content.none { it.type == "text" && !it.text.isNullOrBlank() }) {
-      return ChatFullMessageState.Unavailable(ChatFullMessageUnavailable.Unreadable)
+      return ChatFullMessageState.Failed
     }
     return ChatFullMessageState.Loaded(parsed.content)
   }
