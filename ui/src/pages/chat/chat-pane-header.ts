@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
@@ -178,6 +178,30 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
+    const sharing =
+      sharingMethodsSupported && row
+        ? {
+            session: row,
+            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            onOpen: () => void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility: SessionVisibility) =>
+              void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId: string, member: boolean) =>
+              void this.setSessionMember(row, identityId, member),
+          }
+        : null;
     const renameAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
@@ -467,31 +491,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         },
         onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
-      sharingControl: sharingMethodsSupported
-        ? renderChatSessionSharing({
-            session: row,
-            state: row
-              ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
-              : undefined,
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => row && void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility) =>
-              row && void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId, member) =>
-              row && void this.setSessionMember(row, identityId, member),
-          })
-        : nothing,
+      sharingControl: sharing && !this.narrow ? renderChatSessionSharing(sharing) : nothing,
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu
@@ -518,6 +518,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .statusActions=${this.compactHeaderStatusActions()}
+              .sharing=${sharing}
               .groups=${knownGroups}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}

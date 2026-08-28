@@ -766,7 +766,7 @@ openclaw-chat-pane {
 }
 
 .chat-header-session-menu--compact .session-menu__item {
-  min-height: 44px;
+  min-height: 40px;
 }
 
 .chat-header-session-menu__trigger {
