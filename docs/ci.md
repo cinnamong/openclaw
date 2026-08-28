@@ -118,9 +118,11 @@ GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
 verifying the successful exact-head attempt, its complete same-name job group,
 and direct job evidence that every queued alias has no runner or executed
-steps. Active retries, unrelated checks, and ambiguous or incomplete evidence
-still block completion. This is an observation of CI state, not atomic merge
-authorization.
+steps. Each poll permits at most 32 direct alias lookups, and evidence requests
+share the remaining watcher timeout. Groups exceeding that lookup budget remain
+pending with a warning. Active retries, unrelated checks, and ambiguous or
+incomplete evidence still block completion. This is an observation of CI state,
+not atomic merge authorization.
 
 `--completion ci-run` waits only for the attached CI workflow. Callers must
 separately verify required checks; CI success does not override another

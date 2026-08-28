@@ -53,6 +53,8 @@ function replayPlaceholder(
     jobPages?: unknown[];
     directJobs?: unknown[];
     merged?: boolean;
+    watchTimeout?: number;
+    delayFirstAlias?: boolean;
   } = {},
 ) {
   const root = tempDirs.make("openclaw-watch-pr-ci-replay-");
@@ -85,14 +87,17 @@ else if (args[1]?.startsWith(runPath + "/attempts/3/jobs?per_page=100&page=")) {
   if (value === undefined) throw new Error("missing attempt jobs page");
 }
 else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
-  const jobIds = ${JSON.stringify(placeholderFixture.directJobs.map((job) => job.id))};
-  value = fixture.directJobs[jobIds.indexOf(Number(args[1].split("/").at(-1)))];
+  const jobIds = ${JSON.stringify(fixture.directJobs.map((job) => job.id))};
+  const jobId = Number(args[1].split("/").at(-1));
+  if (fixture.delayFirstAlias && jobId === jobIds[0]) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = fixture.directJobs[jobIds.indexOf(jobId)];
   if (value === undefined) throw new Error("missing direct job response");
 }
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
     placeholderFixture.run.head_sha,
+    evidence.watchTimeout === undefined ? [] : ["--timeout", String(evidence.watchTimeout)],
   );
   return { ...result, calls: readFileSync(calls, "utf8") };
 }
@@ -240,7 +245,7 @@ esac
           rollup.contexts.nodes.push({ ...queuedCheck, databaseId: 98802098559 });
           rollup.contexts.totalCount += 1;
         }
-        const result = replayPlaceholder(fixture);
+        const result = replayPlaceholder(fixture, { watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.stdout).toContain(`pending=0 superseded=${observed}`);
         expect(result.stdout).toContain("GREEN");
@@ -258,6 +263,47 @@ esac
         expect(calls.at(-1)).toContain("Cache-Control: max-age=0");
       },
     );
+
+    it.each([
+      { aliasCount: 32, exitCode: 0 },
+      { aliasCount: 33, exitCode: 16 },
+    ])("bounds direct verification of a $aliasCount-alias group", ({ aliasCount, exitCode }) => {
+      const fixture = structuredClone(placeholderFixture);
+      const alias = fixture.directJobs[0];
+      assert(alias);
+      for (let index = fixture.directJobs.length; index < aliasCount; index += 1) {
+        const extra = { ...alias, id: 1_000_000 + index };
+        fixture.jobs.jobs.push(extra);
+        fixture.directJobs.push(extra);
+      }
+      fixture.jobs.total_count = fixture.jobs.jobs.length;
+      const result = replayPlaceholder(fixture, { watchTimeout: exitCode === 0 ? 5 : 1 });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+      const calls: string[][] = result.calls
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
+      expect(directReads).toHaveLength(exitCode === 0 ? aliasCount : 0);
+      if (exitCode !== 0) {
+        expect(result.stdout).toContain("pending=1");
+        expect(result.stdout).not.toContain("GREEN");
+      }
+    });
+
+    it("bounds a slow alias read by the remaining watcher deadline", () => {
+      const result = replayPlaceholder(structuredClone(placeholderFixture), {
+        delayFirstAlias: true,
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).toContain("pending=1");
+      expect(result.stdout).not.toContain("GREEN");
+      const calls: string[][] = result.calls
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls.filter((call) => call[1]?.includes("/actions/jobs/"))).toHaveLength(1);
+    });
 
     it("keeps the captured merged PR closed", () => {
       const result = replayPlaceholder(structuredClone(placeholderFixture), { merged: true });
@@ -301,6 +347,7 @@ esac
     ])("requires direct unexecuted-job proof: %s", (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
       const result = replayPlaceholder(fixture, {
+        watchTimeout: 5,
         directJobs: fixture.directJobs.map((job) =>
           job.id === 98802098786 ? { ...job, ...patch } : job,
         ),
@@ -341,6 +388,7 @@ esac
     ])("rejects changed run evidence after collecting jobs: %s", (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
       const result = replayPlaceholder(fixture, {
+        watchTimeout: 5,
         runSnapshots: [fixture.run, { ...fixture.run, ...patch }],
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
@@ -436,7 +484,7 @@ esac
         totalCount: contexts.totalCount + 1,
         nodes: [...contexts.nodes, sibling],
       });
-      const result = replayPlaceholder(fixture);
+      const result = replayPlaceholder(fixture, { watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
     });
@@ -495,7 +543,10 @@ esac
         if (scenario === "missing page") jobPages.pop();
         if (scenario === "changed count") lastPage.total_count += 1;
         if (scenario === "over limit") firstPage.total_count = 1_001;
-        const result = replayPlaceholder(fixture, { jobPages });
+        const result = replayPlaceholder(fixture, {
+          jobPages,
+          watchTimeout: scenario === "complete" ? 5 : 1,
+        });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
           scenario === "complete" ? 0 : 16,
         );

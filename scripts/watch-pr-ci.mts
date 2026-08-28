@@ -120,6 +120,7 @@ const FAILURE_CONCLUSIONS = new Set([
   "TIMED_OUT",
 ]);
 const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
+const MAX_ALIAS_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
   timeout: 60_000,
@@ -388,6 +389,7 @@ function readQueuedPlaceholderEvidence(
   headSha: string,
   attached: RunListItem,
   rollup: RollupPayload,
+  deadline: number,
 ) {
   const reconciled = new Set<number>();
   const contexts = rollup.contexts;
@@ -416,8 +418,16 @@ function readQueuedPlaceholderEvidence(
   const runPath = `repos/${repo}/actions/runs/${attached.id}`;
   // Request current evidence through the shared gh seam; the final run read must
   // not deliberately reuse the snapshot from before job collection.
-  const readEvidence = (endpoint: string) =>
-    execGhJson(["api", endpoint, "-H", "Cache-Control: max-age=0"], GH_READ_OPTIONS);
+  const readEvidence = (endpoint: string) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error("queued-alias evidence deadline elapsed");
+    }
+    return execGhJson(["api", endpoint, "-H", "Cache-Control: max-age=0"], {
+      ...GH_READ_OPTIONS,
+      timeout: Math.min(GH_READ_OPTIONS.timeout, remaining),
+    });
+  };
   const readCompletedRun = () => CompletedRunSchema.parse(readEvidence(runPath));
   const run = readCompletedRun();
   if (
@@ -451,6 +461,7 @@ function readQueuedPlaceholderEvidence(
     job.run_id === run.id && job.run_attempt === run.run_attempt && job.head_sha === headSha;
   const unassignedQueued = (job: z.infer<typeof AttemptJobSchema>) =>
     job.status === "queued" && job.conclusion === null && job.runner_id === null;
+  let remainingAliasReads = MAX_ALIAS_READS_PER_POLL;
   for (const name of new Set(queued.map((check) => check.name))) {
     const checks = queued.filter((check) => check.name === name);
     const siblings = jobs.filter((job) => job.name === name);
@@ -474,9 +485,16 @@ function readQueuedPlaceholderEvidence(
     ) {
       continue;
     }
+    // One request per alias can outlive a poll or exhaust API quota. Oversized
+    // groups stay pending; partial verification never proves supersession.
+    if (aliases.length > remainingAliasReads) {
+      console.log("WARN queued-alias evidence exceeds the per-poll request budget");
+      continue;
+    }
     // The list can copy executed steps onto queued aliases, including ones absent
     // from GraphQL. Prove the entire group unexecuted before dropping any visible ID.
     const unexecuted = aliases.every((alias) => {
+      remainingAliasReads -= 1;
       const direct = AttemptJobSchema.parse(readEvidence(`repos/${repo}/actions/jobs/${alias.id}`));
       return (
         direct.id === alias.id &&
@@ -754,6 +772,7 @@ async function main(argv = process.argv.slice(2)) {
             args.headSha,
             attached,
             pr.statusCheckRollup,
+            watchDeadline,
           );
           result = classifyRollup(pr.statusCheckRollup, targetRuns, reconciled);
         }
