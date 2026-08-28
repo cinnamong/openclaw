@@ -511,26 +511,19 @@ export async function finishUpdate(params: {
 
   // Restart and health verification own recovery of the service stopped for this update.
   // Optional completion refresh must run only after that lifecycle boundary settles.
-  const completionCacheRefreshCommand = replaceCliName(
-    formatCliCommand("openclaw completion --write-state"),
-    CLI_NAME,
-  );
   try {
-    const completionCacheResult = await tryWriteCompletionCache(
-      postUpdateRoot,
-      Boolean(params.opts.json),
-    );
-    if (completionCacheResult === "failed" && params.opts.json) {
-      defaultRuntime.error(
-        `Completion cache update failed. Update will continue; retry with: ${completionCacheRefreshCommand}`,
-      );
-    }
+    await tryWriteCompletionCache(postUpdateRoot, Boolean(params.opts.json));
   } catch (err) {
-    const message = `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`;
-    if (params.opts.json) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
+    if (!params.opts.json) {
+      const completionCacheRefreshCommand = replaceCliName(
+        formatCliCommand("openclaw completion --write-state"),
+        CLI_NAME,
+      );
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed: ${formatErrorMessage(err)}. Update will continue; retry with: ${completionCacheRefreshCommand}`,
+        ),
+      );
     }
   }
   await tryInstallShellCompletion({

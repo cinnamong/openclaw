@@ -381,17 +381,31 @@ describe("successful update finalization ordering", () => {
     );
   });
 
-  it.each([
-    { name: "JSON mode", isTTY: true, json: true },
-    { name: "non-TTY mode", isTTY: false, json: false },
-  ])("skips interactive completion in $name", async ({ isTTY, json }) => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: isTTY });
+  it("keeps JSON completion cache failures silent and restarts", async () => {
+    const root = tempDirs.make("openclaw-json-completion-failure-");
+    await fs.writeFile(path.join(root, "openclaw.mjs"), "process.exit(1);");
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: root,
+      packageRoot: root,
+      restartEnvironment: process.env,
+      json: true,
+    });
+
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
+    expect(mocks.ensureCompletionCache).not.toHaveBeenCalled();
+    expect(mocks.restartService).toHaveBeenCalledOnce();
+  });
+
+  it("skips interactive completion in non-TTY mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
 
     await finishSuccessfulPackageSwitch({
       previousRoot: "/tmp/openclaw-update",
       packageRoot: "/tmp/openclaw-update",
       restartEnvironment: process.env,
-      json,
     });
 
     expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
