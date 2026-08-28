@@ -248,9 +248,10 @@ effective survivor baselines and scenarios, preparation-plan digest, sorted
 plugin package set, producer workflow/job/run attempt, and package, registry,
 and image artifact identities and expiry timestamps. The execution plan seals
 that producer evidence. Before preparing a candidate, the umbrella may reuse
-the newest artifact with at least two hours of remaining lifetime for the same
-canonical request only after it revalidates the exact workflow run, trusted
-publisher job, archive digest, manifest, producer attempt, and producer job.
+the newest artifact with at least fourteen hours of remaining lifetime for the
+same canonical request only after it revalidates the exact workflow run,
+trusted publisher job, archive digest, manifest, producer attempt, producer
+job, and live metadata for every package, registry, and image artifact.
 Discovery failures fall back to a fresh build; failures after selection are
 blocking so the run cannot silently switch candidates.
 

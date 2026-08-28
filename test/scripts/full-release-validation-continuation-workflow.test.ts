@@ -4,7 +4,10 @@ import { parse } from "yaml";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
 const workflow = parse(source) as {
-  jobs: Record<string, { if?: string; steps: Array<Record<string, unknown>> }>;
+  jobs: Record<
+    string,
+    { if?: string; steps: Array<Record<string, unknown>>; "timeout-minutes"?: number }
+  >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 
@@ -81,6 +84,10 @@ describe("full release same-parent recovery workflow", () => {
       DIAGNOSTIC_DRAIN_PATH:
         "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
     });
+  });
+
+  it("gives final candidate verification enough time for its bounded API retries", () => {
+    expect(workflow.jobs.summary?.["timeout-minutes"]).toBe(10);
   });
 
   it("keeps failure cancellation explicit while diagnostic drain never cancels", () => {
