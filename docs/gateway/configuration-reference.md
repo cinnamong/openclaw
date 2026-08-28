@@ -1130,11 +1130,11 @@ Gmail-path mappings receive a larger derived allowance described below. Generic
 hooks parse JSON but do not require the JSON content-type header; the TaskFlow
 plugin does enforce it.
 
-| Endpoint             | Payload and result                                                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode }` after enqueueing the system event. `now` also requests a heartbeat; neither result proves the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                         |
-| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                              |
+| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                             |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` for a new event or `"coalesced"` when an equivalent event is already pending. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
+| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                                                                                                                              |
+| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                                                                                                                                   |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
 those names. `/hooks` itself has no action.
@@ -1294,8 +1294,10 @@ pending items return non-2xx with `ok: false`, an incomplete-batch `error`, admi
 Agent fan-out derives replay identity from each rendered action even without an
 explicit idempotency key. Identical retries reconcile pending/admitted items
 within the cache lifetime; keep transforms deterministic for retries. Wake
-actions enqueue immediately and have no replay identity, including mixed
-wake/agent batches. This is not durable exactly-once processing.
+actions dispatch immediately and have no replay identity, including mixed
+wake/agent batches. Their response includes `eventOutcome: "queued"` if any new
+event was queued, or `"coalesced"` if all equivalent events were already pending.
+This is not durable exactly-once processing.
 
 ### Gmail integration
 
