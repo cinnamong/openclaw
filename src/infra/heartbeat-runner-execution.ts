@@ -662,13 +662,17 @@ export async function invokeHeartbeatAgentRun(
     onModelSelected: replyPrefix.onModelSelected,
   };
   const admitSpawn = opts.deps?.admitSpawnOrSkip ?? admitSpawnOrSkip;
-  const admitted = await admitSpawn({
+  const admission = await admitSpawn({
     source: "heartbeat",
     commandId: runSessionKey,
     worktree: resolveAgentWorkspaceDir(cfg, agentId),
     owner: runSessionKey,
   });
-  if (!admitted) {
+  if (!admission.admitted) {
+    log.warn(`heartbeat: control-plane admission gate declined spawn (${admission.reasonCode})`, {
+      reasonCode: admission.reasonCode,
+      detail: admission.detail,
+    });
     return { kind: "cancelled" } as const;
   }
   const replyResult = await getReplyFromConfig(

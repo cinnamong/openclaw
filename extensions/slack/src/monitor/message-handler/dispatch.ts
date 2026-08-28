@@ -52,9 +52,15 @@ import type { PreparedSlackMessage } from "./types.js";
 
 /** Thrown when the control-plane admission gate declines a Slack-ingress spawn. */
 export class SlackIngressSpawnAdmissionDeclinedError extends Error {
-  constructor() {
-    super("control-plane admission gate declined this spawn (no-go)");
+  readonly reasonCode: string;
+
+  constructor(
+    reasonCode = "denied",
+    detail = "control-plane admission gate declined this spawn (no-go)",
+  ) {
+    super(detail);
     this.name = "SlackIngressSpawnAdmissionDeclinedError";
+    this.reasonCode = reasonCode;
   }
 }
 
@@ -70,19 +76,22 @@ export async function admitSlackIngressSpawnOrThrow(
   },
   admissionOptions?: Parameters<typeof admitSpawnOrSkip>[1],
 ): Promise<void> {
-  const admitted = await admitSpawnOrSkip(
+  const admission = await admitSpawnOrSkip(
     {
       source: "slack_ingress",
       commandId: params.route.sessionKey,
+      // No cwd fallback: an unresolved agent workspace means unresolved
+      // identity, and the gate must fail closed on that rather than
+      // substituting the process's current working directory.
       worktree: params.route.agentId
         ? resolveAgentWorkspaceDir(params.cfg, params.route.agentId)
-        : process.cwd(),
+        : undefined,
       owner: params.route.sessionKey,
     },
     admissionOptions,
   );
-  if (!admitted) {
-    throw new SlackIngressSpawnAdmissionDeclinedError();
+  if (!admission.admitted) {
+    throw new SlackIngressSpawnAdmissionDeclinedError(admission.reasonCode, admission.detail);
   }
 }
 

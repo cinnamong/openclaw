@@ -257,9 +257,15 @@ export async function queueSubagentAnnounceMessage(
 
 /** Thrown when the control-plane admission gate declines a completion-callback spawn. */
 export class SpawnAdmissionDeclinedError extends Error {
-  constructor() {
-    super("control-plane admission gate declined this spawn (no-go)");
+  readonly reasonCode: string;
+
+  constructor(
+    reasonCode = "denied",
+    detail = "control-plane admission gate declined this spawn (no-go)",
+  ) {
+    super(detail);
     this.name = "SpawnAdmissionDeclinedError";
+    this.reasonCode = reasonCode;
   }
 }
 
@@ -272,17 +278,20 @@ export async function dispatchSubagentAnnounceAgent(
   const idempotencyKey =
     typeof agentParams.idempotencyKey === "string" ? agentParams.idempotencyKey : undefined;
   const parsedAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
-  const owner = sessionKey ?? "unknown";
-  const admitted = await subagentAnnounceDeliveryDeps.admitSpawnOrSkip({
+  // No placeholder fallback: an absent sessionKey means there is no real
+  // owner identity, and the admission gate must fail closed on that rather
+  // than substituting "unknown".
+  const owner = sessionKey;
+  const admission = await subagentAnnounceDeliveryDeps.admitSpawnOrSkip({
     source: "completion",
-    commandId: idempotencyKey ?? owner,
+    commandId: idempotencyKey ?? owner ?? "completion-unidentified",
     worktree: parsedAgentId
       ? resolveAgentWorkspaceDir(subagentAnnounceDeliveryDeps.getRuntimeConfig(), parsedAgentId)
-      : process.cwd(),
+      : undefined,
     owner,
   });
-  if (!admitted) {
-    throw new SpawnAdmissionDeclinedError();
+  if (!admission.admitted) {
+    throw new SpawnAdmissionDeclinedError(admission.reasonCode, admission.detail);
   }
   return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
     "agent",

@@ -43,7 +43,9 @@ describe("invokeHeartbeatAgentRun control-plane admission gate", () => {
   it("flag on + no-go: skips getReplyFromConfig and returns a cancelled result", async () => {
     const { wake, prepared } = buildFixtures();
     const getReplyFromConfig = vi.fn().mockRejectedValue(SENTINEL_ERROR);
-    const admitSpawnOrSkip = vi.fn().mockResolvedValue(false);
+    const admitSpawnOrSkip = vi
+      .fn()
+      .mockResolvedValue({ admitted: false, reasonCode: "denied", detail: "no-go" });
 
     const result = await invokeHeartbeatAgentRun(
       { deps: { getReplyFromConfig, admitSpawnOrSkip } },
@@ -64,7 +66,9 @@ describe("invokeHeartbeatAgentRun control-plane admission gate", () => {
   it("flag on + go: proceeds to getReplyFromConfig", async () => {
     const { wake, prepared } = buildFixtures();
     const getReplyFromConfig = vi.fn().mockRejectedValue(SENTINEL_ERROR);
-    const admitSpawnOrSkip = vi.fn().mockResolvedValue(true);
+    const admitSpawnOrSkip = vi
+      .fn()
+      .mockResolvedValue({ admitted: true, reasonCode: "admitted", detail: "ok" });
 
     await expect(
       invokeHeartbeatAgentRun({ deps: { getReplyFromConfig, admitSpawnOrSkip } }, wake, prepared),
