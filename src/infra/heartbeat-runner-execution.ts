@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
@@ -42,6 +43,7 @@ import {
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { admitSpawnOrSkip } from "../plugin-sdk/control-plane-admission-gate.js";
 import {
   getQueueSize,
   isCommandLaneTaskMarkerCurrent,
@@ -107,6 +109,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
     nowMs?: () => number;
+    admitSpawnOrSkip?: typeof admitSpawnOrSkip;
   };
 
 const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
@@ -658,6 +661,16 @@ export async function invokeHeartbeatAgentRun(
     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
     onModelSelected: replyPrefix.onModelSelected,
   };
+  const admitSpawn = opts.deps?.admitSpawnOrSkip ?? admitSpawnOrSkip;
+  const admitted = await admitSpawn({
+    source: "heartbeat",
+    commandId: runSessionKey,
+    worktree: resolveAgentWorkspaceDir(cfg, agentId),
+    owner: runSessionKey,
+  });
+  if (!admitted) {
+    return { kind: "cancelled" } as const;
+  }
   const replyResult = await getReplyFromConfig(
     {
       Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),

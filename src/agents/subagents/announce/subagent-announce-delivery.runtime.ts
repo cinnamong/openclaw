@@ -4,6 +4,7 @@
  * Tests override this module's delivery capabilities while origin routing keeps
  * using the direct runtime exports below.
  */
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
@@ -16,6 +17,7 @@ import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound
 import { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { sendMessage } from "../../../infra/outbound/message.js";
+import { admitSpawnOrSkip } from "../../../plugin-sdk/control-plane-admission-gate.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   normalizeAgentId,
@@ -64,6 +66,7 @@ export type SubagentAnnounceDeliveryDeps = {
     options?: EmbeddedAgentQueueMessageOptions,
   ) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
   sendMessage: typeof sendMessage;
+  admitSpawnOrSkip: typeof admitSpawnOrSkip;
 };
 
 type RequesterSessionEntryResult = {
@@ -162,6 +165,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   queueEmbeddedAgentMessageWithOutcome: (...args) =>
     queueEmbeddedAgentMessageWithOutcomeAsync(...args),
   sendMessage: (...args) => sendMessage(...args),
+  admitSpawnOrSkip: (...args) => admitSpawnOrSkip(...args),
 };
 
 let subagentAnnounceDeliveryDeps = defaultSubagentAnnounceDeliveryDeps;
@@ -251,10 +255,35 @@ export async function queueSubagentAnnounceMessage(
   );
 }
 
+/** Thrown when the control-plane admission gate declines a completion-callback spawn. */
+export class SpawnAdmissionDeclinedError extends Error {
+  constructor() {
+    super("control-plane admission gate declined this spawn (no-go)");
+    this.name = "SpawnAdmissionDeclinedError";
+  }
+}
+
 export async function dispatchSubagentAnnounceAgent(
   agentParams: Record<string, unknown>,
   options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
 ): Promise<unknown> {
+  const sessionKey =
+    typeof agentParams.sessionKey === "string" ? agentParams.sessionKey : undefined;
+  const idempotencyKey =
+    typeof agentParams.idempotencyKey === "string" ? agentParams.idempotencyKey : undefined;
+  const parsedAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
+  const owner = sessionKey ?? "unknown";
+  const admitted = await subagentAnnounceDeliveryDeps.admitSpawnOrSkip({
+    source: "completion",
+    commandId: idempotencyKey ?? owner,
+    worktree: parsedAgentId
+      ? resolveAgentWorkspaceDir(subagentAnnounceDeliveryDeps.getRuntimeConfig(), parsedAgentId)
+      : process.cwd(),
+    owner,
+  });
+  if (!admitted) {
+    throw new SpawnAdmissionDeclinedError();
+  }
   return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
     "agent",
     agentParams,

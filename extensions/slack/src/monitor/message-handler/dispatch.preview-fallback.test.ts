@@ -467,6 +467,7 @@ async function dispatchNativeProgressScenario(params: {
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: () => undefined,
+  resolveAgentWorkspaceDir: () => "/tmp/mock-workspace",
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
