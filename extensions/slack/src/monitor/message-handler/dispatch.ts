@@ -1,5 +1,8 @@
 // Slack plugin module implements dispatch behavior.
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentWorkspaceDir,
+  resolveHumanDelayConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
   resolveInboundReplyDispatchCounts,
@@ -11,6 +14,7 @@ import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { admitSpawnOrSkip } from "openclaw/plugin-sdk/control-plane-admission-gate";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
@@ -45,6 +49,51 @@ import { createSlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+/** Thrown when the control-plane admission gate declines a Slack-ingress spawn. */
+export class SlackIngressSpawnAdmissionDeclinedError extends Error {
+  readonly reasonCode: string;
+
+  constructor(
+    reasonCode = "denied",
+    detail = "control-plane admission gate declined this spawn (no-go)",
+  ) {
+    super(detail);
+    this.name = "SlackIngressSpawnAdmissionDeclinedError";
+    this.reasonCode = reasonCode;
+  }
+}
+
+/**
+ * Gates a Slack-ingress spawn behind the control-plane admission contract.
+ * When the gate is off (the default), this resolves without side effects
+ * before the caller's existing dispatch call.
+ */
+export async function admitSlackIngressSpawnOrThrow(
+  params: {
+    cfg: Parameters<typeof resolveAgentWorkspaceDir>[0];
+    route: { agentId?: string; sessionKey: string };
+  },
+  admissionOptions?: Parameters<typeof admitSpawnOrSkip>[1],
+): Promise<void> {
+  const admission = await admitSpawnOrSkip(
+    {
+      source: "slack_ingress",
+      commandId: params.route.sessionKey,
+      // No cwd fallback: an unresolved agent workspace means unresolved
+      // identity, and the gate must fail closed on that rather than
+      // substituting the process's current working directory.
+      worktree: params.route.agentId
+        ? resolveAgentWorkspaceDir(params.cfg, params.route.agentId)
+        : undefined,
+      owner: params.route.sessionKey,
+    },
+    admissionOptions,
+  );
+  if (!admission.admitted) {
+    throw new SlackIngressSpawnAdmissionDeclinedError(admission.reasonCode, admission.detail);
+  }
+}
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const setup = await createSlackDispatchSetup(prepared);
@@ -388,6 +437,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let agentRunFailed = false;
   let settledDispatchResult: Parameters<typeof hasVisibleInboundReplyDispatch>[0];
   try {
+    await admitSlackIngressSpawnOrThrow({ cfg, route });
     const turnResult = await dispatchChannelInboundTurn({
       cfg,
       channel: "slack",

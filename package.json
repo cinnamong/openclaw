@@ -1032,6 +1032,10 @@
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
     },
+    "./plugin-sdk/control-plane-admission-gate": {
+      "types": "./dist/plugin-sdk/control-plane-admission-gate.d.ts",
+      "default": "./dist/plugin-sdk/control-plane-admission-gate.js"
+    },
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
     },
