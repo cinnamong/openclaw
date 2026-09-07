@@ -10,6 +10,9 @@ import {
 } from "./control-plane-admission-gate.js";
 
 describe("control-plane admission gate flag resolution", () => {
+  const sourceFlag = (source: string) =>
+    `${CONTROL_PLANE_ADMISSION_GATE_ENV}_${source.toUpperCase()}`;
+
   it("defaults OFF when the env var is unset", () => {
     expect(isControlPlaneAdmissionGateEnabled({})).toBe(false);
   });
@@ -29,9 +32,32 @@ describe("control-plane admission gate flag resolution", () => {
       ).toBe(true);
     }
   });
+
+  it("allows one call site to be enabled while the others stay off", () => {
+    const env = {
+      [sourceFlag("heartbeat")]: "true",
+    };
+
+    expect(isControlPlaneAdmissionGateEnabled(env, "heartbeat")).toBe(true);
+    expect(isControlPlaneAdmissionGateEnabled(env, "completion")).toBe(false);
+    expect(isControlPlaneAdmissionGateEnabled(env, "slack_ingress")).toBe(false);
+  });
+
+  it("lets an explicit source false value roll back one call site independently", () => {
+    const env = {
+      [CONTROL_PLANE_ADMISSION_GATE_ENV]: "true",
+      [sourceFlag("completion")]: "false",
+    };
+
+    expect(isControlPlaneAdmissionGateEnabled(env, "heartbeat")).toBe(true);
+    expect(isControlPlaneAdmissionGateEnabled(env, "completion")).toBe(false);
+    expect(isControlPlaneAdmissionGateEnabled(env, "slack_ingress")).toBe(true);
+  });
 });
 
 describe("admitSpawnOrSkip", () => {
+  const sourceFlag = (source: string) =>
+    `${CONTROL_PLANE_ADMISSION_GATE_ENV}_${source.toUpperCase()}`;
   const request = {
     source: "heartbeat" as const,
     commandId: "cmd-1",
@@ -53,6 +79,23 @@ describe("admitSpawnOrSkip", () => {
       detail: expect.any(String),
     });
     expect(runAdmissionCheck).not.toHaveBeenCalled();
+  });
+
+  it("source flag ON: enables only the matching request source", async () => {
+    const runAdmissionCheck = vi
+      .fn()
+      .mockResolvedValue({ admitted: true, reasonCode: "admitted", detail: "ok" });
+    const env = {
+      [sourceFlag("heartbeat")]: "true",
+    };
+
+    await expect(admitSpawnOrSkip(request, { env, runAdmissionCheck })).resolves.toMatchObject({
+      admitted: true,
+    });
+    await expect(
+      admitSpawnOrSkip({ ...request, source: "completion" }, { env, runAdmissionCheck }),
+    ).resolves.toMatchObject({ admitted: true, reasonCode: "flag_off" });
+    expect(runAdmissionCheck).toHaveBeenCalledTimes(1);
   });
 
   it("flag ON: delegates to the injected admission check and allows on go", async () => {
