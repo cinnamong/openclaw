@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
@@ -23,6 +24,7 @@ import {
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { admitSpawnOrSkip } from "../plugin-sdk/control-plane-admission-gate.js";
 import { getQueueSize, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -79,6 +81,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
+    admitSpawnOrSkip?: typeof admitSpawnOrSkip;
     nowMs?: () => number;
   };
 
@@ -548,3 +551,17 @@ export type PreparedHeartbeatRun = StageResult<
   ReturnType<typeof prepareHeartbeatRunStage>,
   "ready"
 >;
+
+export async function admitHeartbeatSpawn(
+  opts: HeartbeatRunOptions,
+  wake: ReadyHeartbeatWake,
+  prepared: PreparedHeartbeatRun,
+) {
+  const admitSpawn = opts.deps?.admitSpawnOrSkip ?? admitSpawnOrSkip;
+  return admitSpawn({
+    source: "heartbeat",
+    commandId: prepared.runSessionKey,
+    worktree: resolveAgentWorkspaceDir(wake.cfg, wake.agentId),
+    owner: prepared.runSessionKey,
+  });
+}

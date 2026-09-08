@@ -20,6 +20,7 @@ import {
 } from "./heartbeat-runner-config.js";
 import {
   prepareHeartbeatRunStage,
+  admitHeartbeatSpawn,
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
@@ -37,6 +38,19 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   }
   const { cfg, agentId, heartbeat, startedAt } = wake;
   const { delivery, visibility, sender, runSessionKey, suppressOriginatingContext } = prepared;
+  const admission = await admitHeartbeatSpawn(opts, wake, prepared);
+  if (!admission.admitted) {
+    heartbeatLog.warn(
+      `heartbeat: control-plane admission gate declined spawn (${admission.reasonCode})`,
+      { reasonCode: admission.reasonCode, detail: admission.detail },
+    );
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "requests-in-flight",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "requests-in-flight" };
+  }
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
       status: "skipped",

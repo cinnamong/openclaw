@@ -208,6 +208,7 @@
   "channel-feedback",
   "channel-inbound",
   "channel-inbound-debounce",
+  "control-plane-admission-gate",
   "channel-mention-gating",
   "channel-lifecycle",
   "channel-ingress-runtime",

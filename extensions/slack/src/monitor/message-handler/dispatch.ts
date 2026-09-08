@@ -35,6 +35,7 @@ import {
 } from "../../sent-thread-cache.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
+import { admitSlackIngressSpawnOrThrow } from "./dispatch-admission.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup, type SlackDispatchSetup } from "./dispatch-setup.js";
@@ -453,6 +454,7 @@ async function dispatchSlackMessageWithSetup(
   let agentRunFailed = false;
   let settledDispatchResult: Parameters<typeof hasVisibleInboundReplyDispatch>[0];
   try {
+    await admitSlackIngressSpawnOrThrow({ cfg, route });
     const turnResult = await dispatchChannelInboundTurn({
       cfg,
       channel: "slack",
