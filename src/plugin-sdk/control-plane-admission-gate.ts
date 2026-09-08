@@ -3,8 +3,10 @@
 // Phase 2 wiring (control-plane-contract.md, "Phase 2 — live OpenClaw runtime
 // wiring"): each of the three independent spawn triggers (heartbeat,
 // completion callback, Slack ingress) calls `admitSpawnOrSkip` immediately
-// before its existing spawn call. Defaults OFF everywhere
-// (`OPENCLAW_CONTROL_PLANE_ADMISSION_GATE` unset/falsy): `admitSpawnOrSkip`
+// before its existing spawn call. Each source has an independent rollout flag;
+// the original global flag remains the backward-compatible fallback. Defaults
+// OFF everywhere when both the source flag and
+// `OPENCLAW_CONTROL_PLANE_ADMISSION_GATE` are unset/falsy: `admitSpawnOrSkip`
 // then returns `{ admitted: true, reasonCode: "flag_off" }` before doing
 // anything else, so the caller's existing spawn call runs exactly as it did
 // before this module existed.
@@ -22,7 +24,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "../infra/env.js";
 
-/** Env var that turns the admission gate on. Unset/falsy = OFF (the default). */
+/** Backward-compatible global fallback. Unset/falsy = OFF (the default). */
 export const CONTROL_PLANE_ADMISSION_GATE_ENV = "OPENCLAW_CONTROL_PLANE_ADMISSION_GATE";
 /**
  * Required when the gate is on: absolute path to the control-plane
@@ -77,8 +79,21 @@ export type AdmissionOutcome = {
 
 export type RunAdmissionCheck = (request: SpawnAdmissionRequest) => Promise<AdmissionOutcome>;
 
-/** Resolves whether the control-plane admission gate is enabled. Defaults OFF. */
-export function isControlPlaneAdmissionGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/**
+ * Resolves whether the admission gate is enabled. A source-specific value,
+ * including an explicit false value, overrides the global fallback so each
+ * call site can be enabled and rolled back independently.
+ */
+export function isControlPlaneAdmissionGateEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  source?: SpawnAdmissionSource,
+): boolean {
+  if (source) {
+    const sourceValue = env[`${CONTROL_PLANE_ADMISSION_GATE_ENV}_${source.toUpperCase()}`];
+    if (sourceValue !== undefined) {
+      return isTruthyEnvValue(sourceValue);
+    }
+  }
   return isTruthyEnvValue(env[CONTROL_PLANE_ADMISSION_GATE_ENV]);
 }
 
@@ -231,7 +246,7 @@ export async function admitSpawnOrSkip(
   } = {},
 ): Promise<AdmissionOutcome> {
   const env = options.env ?? process.env;
-  if (!isControlPlaneAdmissionGateEnabled(env)) {
+  if (!isControlPlaneAdmissionGateEnabled(env, request.source)) {
     return {
       admitted: true,
       reasonCode: "flag_off",
