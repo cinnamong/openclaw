@@ -81,6 +81,7 @@ enum RemoteGatewayAuthIssue: Equatable {
                 + "set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
         case .setupCodeExpired:
             "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
+        // Localization: onboarding means initial app/Gateway setup, not joining or participation.
         case .passwordRequired:
             "This onboarding flow does not support password auth yet. "
                 + "Reconfigure the gateway to use token auth, then retry."
@@ -229,6 +230,9 @@ enum RemoteGatewayProbe {
                 })
             return .ready(RemoteGatewayProbeSuccess(authSource: authSource))
         } catch {
+            if let issue = GatewayCompatibilityIssue(error: error) {
+                return .failed(issue.message)
+            }
             if let authIssue = RemoteGatewayAuthIssue(error: error) {
                 return .authIssue(authIssue)
             }

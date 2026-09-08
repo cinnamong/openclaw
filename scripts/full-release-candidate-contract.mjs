@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { canonicalAsciiJson } from "./lib/canonical-json.mjs";
+import { canonicalAsciiJson, compareAscii } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   normalizeUpgradeSurvivorBaselineSpec,
@@ -10,10 +10,10 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
-const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v1";
-const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v1";
-const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v1-";
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v2";
+const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v2";
+const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v2";
+const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v2-";
 
 const MANIFEST_MAX_BYTES = 32 * 1024;
 const BINDING_MAX_BYTES = 40 * 1024;
@@ -28,8 +28,6 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const WORKFLOW_PATH_PATTERN = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/u;
 const RELEASE_PROFILES = new Set(["minimum", "beta", "stable", "full"]);
 const SHARED_IMAGE_POLICIES = new Set(["existing-only", "no-push-artifact"]);
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
-
 function fail(message) {
   throw new Error(message);
 }
@@ -151,6 +149,7 @@ export function buildFullReleaseCandidateRequest(input) {
     upgradeSurvivorScenarios: effectiveScenarios.toSorted(compareAscii),
     allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
     allowUnreleasedChangelog: input.allowUnreleasedChangelog,
+    packagePublished: input.packagePublished,
     sharedImagePolicy: input.sharedImagePolicy,
     contractVersions: {
       package: 1,
@@ -167,6 +166,7 @@ export function validateFullReleaseCandidateRequest(value) {
       "allowFrozenTargetScenarioOmissions",
       "allowUnreleasedChangelog",
       "contractVersions",
+      "packagePublished",
       "releaseProfile",
       "releaseSoak",
       "repository",
@@ -245,6 +245,10 @@ export function validateFullReleaseCandidateRequest(value) {
     toolingSha: sha(value.toolingSha, "full release candidate request toolingSha"),
     releaseProfile,
     releaseSoak: boolean(value.releaseSoak, "full release candidate request releaseSoak"),
+    packagePublished: boolean(
+      value.packagePublished,
+      "full release candidate request packagePublished",
+    ),
     upgradeSurvivorBaselines: baselines,
     upgradeSurvivorScenarios: scenarios,
     allowFrozenTargetScenarioOmissions: boolean(
@@ -264,12 +268,19 @@ export function validateFullReleaseCandidateRequest(value) {
   };
 }
 
-function canonicalFullReleaseCandidateRequestJson(value) {
+export function canonicalFullReleaseCandidateRequestJson(value) {
   return canonicalAsciiJson(validateFullReleaseCandidateRequest(value));
 }
 
-function candidateRequestSha256(value) {
+export function candidateRequestSha256(value) {
   return createHash("sha256").update(canonicalFullReleaseCandidateRequestJson(value)).digest("hex");
+}
+
+export function fullReleaseCandidateArtifactName(requestSha256) {
+  return `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${sha256(
+    requestSha256,
+    "full release candidate requestSha256",
+  )}`;
 }
 
 function artifactIdentity(value, label) {
@@ -356,6 +367,12 @@ function validateSharedImage(value, packageSha256) {
 function assertProducedInSameAttempt(manifest) {
   const expectedRunId = manifest.producer.runId;
   const expectedRunAttempt = manifest.producer.runAttempt;
+  if (
+    manifest.publisher.runId !== expectedRunId ||
+    manifest.publisher.runAttempt !== expectedRunAttempt
+  ) {
+    fail("full release candidate publisher was not bound to the declared producer attempt");
+  }
   for (const [label, artifact] of [
     ["package", manifest.package.artifact],
     ["prepublish plugin registry", manifest.prepublishPluginRegistry.artifact],
@@ -367,6 +384,27 @@ function assertProducedInSameAttempt(manifest) {
   }
 }
 
+function validateCandidateJobIdentity(value, label, request) {
+  exactKeys(
+    value,
+    ["jobId", "jobName", "repository", "runAttempt", "runId", "workflowPath", "workflowSha"],
+    label,
+  );
+  const identity = {
+    jobId: positiveDecimal(value.jobId, `${label} jobId`),
+    jobName: ascii(value.jobName, `${label} jobName`),
+    repository: repository(value.repository, `${label} repository`),
+    runAttempt: positiveDecimal(value.runAttempt, `${label} runAttempt`),
+    runId: positiveDecimal(value.runId, `${label} runId`),
+    workflowPath: workflowPath(value.workflowPath, `${label} workflowPath`),
+    workflowSha: sha(value.workflowSha, `${label} workflowSha`),
+  };
+  if (identity.repository !== request.repository || identity.workflowSha !== request.toolingSha) {
+    fail(`${label} does not match the request`);
+  }
+  return identity;
+}
+
 function validateFullReleaseCandidateManifest(value) {
   exactKeys(
     value,
@@ -375,6 +413,7 @@ function validateFullReleaseCandidateManifest(value) {
       "preparation",
       "prepublishPluginRegistry",
       "producer",
+      "publisher",
       "request",
       "requestSha256",
       "schema",
@@ -390,29 +429,16 @@ function validateFullReleaseCandidateManifest(value) {
   if (requestSha256 !== candidateRequestSha256(request)) {
     fail("full release candidate requestSha256 does not match the request");
   }
-  exactKeys(
+  const producer = validateCandidateJobIdentity(
     value.producer,
-    ["jobId", "jobName", "repository", "runAttempt", "runId", "workflowPath", "workflowSha"],
     "full release candidate producer",
+    request,
   );
-  const producer = {
-    jobId: positiveDecimal(value.producer.jobId, "full release candidate producer jobId"),
-    jobName: ascii(value.producer.jobName, "full release candidate producer jobName"),
-    repository: repository(value.producer.repository, "full release candidate producer repository"),
-    runAttempt: positiveDecimal(
-      value.producer.runAttempt,
-      "full release candidate producer runAttempt",
-    ),
-    runId: positiveDecimal(value.producer.runId, "full release candidate producer runId"),
-    workflowPath: workflowPath(
-      value.producer.workflowPath,
-      "full release candidate producer workflowPath",
-    ),
-    workflowSha: sha(value.producer.workflowSha, "full release candidate producer workflowSha"),
-  };
-  if (producer.repository !== request.repository || producer.workflowSha !== request.toolingSha) {
-    fail("full release candidate producer does not match the request");
-  }
+  const publisher = validateCandidateJobIdentity(
+    value.publisher,
+    "full release candidate publisher",
+    request,
+  );
   exactKeys(
     value.preparation,
     ["planSha256", "requiredPrepublishPluginPackages"],
@@ -434,6 +460,7 @@ function validateFullReleaseCandidateManifest(value) {
     request,
     requestSha256,
     producer,
+    publisher,
     preparation,
     package: packageValue,
     prepublishPluginRegistry: validateRegistry(
@@ -471,14 +498,14 @@ function fullReleaseCandidateManifestSha256(value) {
     .digest("hex");
 }
 
-function buildFullReleaseCandidateBinding({ artifact, manifest }) {
+export function buildFullReleaseCandidateBinding({ artifact, manifest }) {
   const validatedManifest = validateFullReleaseCandidateManifest(manifest);
   const evidenceArtifact = artifactIdentity(artifact, "full release candidate evidence artifact");
-  const expectedName = `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${validatedManifest.requestSha256}`;
+  const expectedName = fullReleaseCandidateArtifactName(validatedManifest.requestSha256);
   if (
     evidenceArtifact.name !== expectedName ||
-    evidenceArtifact.runId !== validatedManifest.producer.runId ||
-    evidenceArtifact.runAttempt !== validatedManifest.producer.runAttempt
+    evidenceArtifact.runId !== validatedManifest.publisher.runId ||
+    evidenceArtifact.runAttempt !== validatedManifest.publisher.runAttempt
   ) {
     fail("full release candidate evidence artifact does not match its manifest");
   }
@@ -487,6 +514,7 @@ function buildFullReleaseCandidateBinding({ artifact, manifest }) {
     request: validatedManifest.request,
     requestSha256: validatedManifest.requestSha256,
     producer: validatedManifest.producer,
+    publisher: validatedManifest.publisher,
     evidenceArtifact,
     manifestSha256: fullReleaseCandidateManifestSha256(validatedManifest),
     preparation: validatedManifest.preparation,
@@ -506,6 +534,7 @@ export function validateFullReleaseCandidateBinding(value) {
       "preparation",
       "prepublishPluginRegistry",
       "producer",
+      "publisher",
       "request",
       "requestSha256",
       "schema",
@@ -521,43 +550,24 @@ export function validateFullReleaseCandidateBinding(value) {
   if (requestSha256 !== candidateRequestSha256(request)) {
     fail("full release candidate binding requestSha256 does not match the request");
   }
-  exactKeys(
+  const producer = validateCandidateJobIdentity(
     value.producer,
-    ["jobId", "jobName", "repository", "runAttempt", "runId", "workflowPath", "workflowSha"],
     "full release candidate binding producer",
+    request,
   );
-  const producer = {
-    jobId: positiveDecimal(value.producer.jobId, "full release candidate binding producer jobId"),
-    jobName: ascii(value.producer.jobName, "full release candidate binding producer jobName"),
-    repository: repository(
-      value.producer.repository,
-      "full release candidate binding producer repository",
-    ),
-    runAttempt: positiveDecimal(
-      value.producer.runAttempt,
-      "full release candidate binding producer runAttempt",
-    ),
-    runId: positiveDecimal(value.producer.runId, "full release candidate binding producer runId"),
-    workflowPath: workflowPath(
-      value.producer.workflowPath,
-      "full release candidate binding producer workflowPath",
-    ),
-    workflowSha: sha(
-      value.producer.workflowSha,
-      "full release candidate binding producer workflowSha",
-    ),
-  };
-  if (producer.repository !== request.repository || producer.workflowSha !== request.toolingSha) {
-    fail("full release candidate binding producer does not match the request");
-  }
+  const publisher = validateCandidateJobIdentity(
+    value.publisher,
+    "full release candidate binding publisher",
+    request,
+  );
   const evidenceArtifact = artifactIdentity(
     value.evidenceArtifact,
     "full release candidate binding evidenceArtifact",
   );
   if (
-    evidenceArtifact.name !== `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${requestSha256}` ||
-    evidenceArtifact.runId !== producer.runId ||
-    evidenceArtifact.runAttempt !== producer.runAttempt
+    evidenceArtifact.name !== fullReleaseCandidateArtifactName(requestSha256) ||
+    evidenceArtifact.runId !== publisher.runId ||
+    evidenceArtifact.runAttempt !== publisher.runAttempt
   ) {
     fail("full release candidate binding evidence artifact is invalid");
   }
@@ -592,6 +602,7 @@ export function validateFullReleaseCandidateBinding(value) {
     request,
     requestSha256,
     producer,
+    publisher,
     preparation,
     package: packageValue,
     prepublishPluginRegistry,
@@ -605,6 +616,7 @@ export function validateFullReleaseCandidateBinding(value) {
     request,
     requestSha256,
     producer,
+    publisher,
     evidenceArtifact,
     manifestSha256,
     preparation,

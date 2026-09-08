@@ -1,79 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { invokeHeartbeatAgentRun } from "./heartbeat-runner-execution.js";
+import { admitHeartbeatSpawn } from "./heartbeat-runner-execution.js";
 
-const SENTINEL_ERROR = new Error("getReplyFromConfig reached (test sentinel)");
-
-function buildFixtures() {
-  const cfg = {} as OpenClawConfig;
-  const wake = {
-    kind: "ready",
-    cfg,
-    agentId: "test-agent",
-    heartbeat: undefined,
-    startedAt: 0,
-    preflight: {},
-  } as unknown as Parameters<typeof invokeHeartbeatAgentRun>[1];
-  const prepared = {
-    kind: "ready",
-    delivery: { channel: "none", to: undefined, accountId: undefined, threadId: undefined },
-    hasExecCompletion: false,
-    hasCronEvents: false,
-    prompt: "hello",
-    replyPrefix: { onModelSelected: undefined },
-    runSessionKey: "session-1",
-    sender: "sender-1",
-    suppressOriginatingContext: false,
-    usesHeartbeatResponseTool: false,
-  } as unknown as Parameters<typeof invokeHeartbeatAgentRun>[2];
-  return { cfg, wake, prepared };
-}
-
-describe("invokeHeartbeatAgentRun control-plane admission gate", () => {
-  it("flag off (no override): reaches getReplyFromConfig exactly as before this change", async () => {
-    const { wake, prepared } = buildFixtures();
-    const getReplyFromConfig = vi.fn().mockRejectedValue(SENTINEL_ERROR);
-
-    await expect(
-      invokeHeartbeatAgentRun({ deps: { getReplyFromConfig } }, wake, prepared),
-    ).rejects.toBe(SENTINEL_ERROR);
-    expect(getReplyFromConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("flag on + no-go: skips getReplyFromConfig and returns a cancelled result", async () => {
-    const { wake, prepared } = buildFixtures();
-    const getReplyFromConfig = vi.fn().mockRejectedValue(SENTINEL_ERROR);
-    const admitSpawnOrSkip = vi
-      .fn()
-      .mockResolvedValue({ admitted: false, reasonCode: "denied", detail: "no-go" });
-
-    const result = await invokeHeartbeatAgentRun(
-      { deps: { getReplyFromConfig, admitSpawnOrSkip } },
-      wake,
-      prepared,
+describe("admitHeartbeatSpawn", () => {
+  it("passes the resolved heartbeat identity to the admission gate", async () => {
+    const admitSpawnOrSkip = vi.fn().mockResolvedValue({
+      admitted: true,
+      reasonCode: "admitted",
+      detail: "ok",
+    });
+    const result = await admitHeartbeatSpawn(
+      { deps: { admitSpawnOrSkip } },
+      {
+        cfg: { agents: { defaults: { workspace: "/tmp/heartbeat-worktree" } } },
+        agentId: "main",
+      } as never,
+      { runSessionKey: "agent:main:heartbeat" } as never,
     );
-
-    expect(result).toEqual({ kind: "cancelled" });
-    expect(getReplyFromConfig).not.toHaveBeenCalled();
+    expect(result.admitted).toBe(true);
     expect(admitSpawnOrSkip).toHaveBeenCalledWith({
       source: "heartbeat",
-      commandId: "session-1",
-      worktree: expect.any(String),
-      owner: "session-1",
+      commandId: "agent:main:heartbeat",
+      worktree: "/tmp/heartbeat-worktree",
+      owner: "agent:main:heartbeat",
     });
   });
 
-  it("flag on + go: proceeds to getReplyFromConfig", async () => {
-    const { wake, prepared } = buildFixtures();
-    const getReplyFromConfig = vi.fn().mockRejectedValue(SENTINEL_ERROR);
-    const admitSpawnOrSkip = vi
-      .fn()
-      .mockResolvedValue({ admitted: true, reasonCode: "admitted", detail: "ok" });
-
-    await expect(
-      invokeHeartbeatAgentRun({ deps: { getReplyFromConfig, admitSpawnOrSkip } }, wake, prepared),
-    ).rejects.toBe(SENTINEL_ERROR);
-    expect(getReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(admitSpawnOrSkip).toHaveBeenCalledTimes(1);
+  it("propagates a no-go result without changing it", async () => {
+    const denied = { admitted: false, reasonCode: "denied", detail: "held" } as const;
+    const result = await admitHeartbeatSpawn(
+      { deps: { admitSpawnOrSkip: vi.fn().mockResolvedValue(denied) } },
+      { cfg: {}, agentId: "main" } as never,
+      { runSessionKey: "agent:main:heartbeat" } as never,
+    );
+    expect(result).toEqual(denied);
   });
 });

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   admitSlackIngressSpawnOrThrow,
   SlackIngressSpawnAdmissionDeclinedError,
-} from "./dispatch.js";
+} from "./dispatch-admission.js";
 
 describe("admitSlackIngressSpawnOrThrow (Slack-ingress spawn call site)", () => {
   const route = { agentId: "test-agent", sessionKey: "slack:test-agent:C1:U1" };

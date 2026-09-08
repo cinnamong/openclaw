@@ -198,7 +198,7 @@ export function runControlPlaneAdmissionCheck(
           });
           return;
         }
-        if ((error as NodeJS.ErrnoException & { killed?: boolean }).killed) {
+        if (error.killed) {
           resolve({
             admitted: false,
             reasonCode: "timeout",
@@ -206,13 +206,11 @@ export function runControlPlaneAdmissionCheck(
           });
           return;
         }
-        if (typeof (error as { code?: unknown }).code === "number") {
+        if (typeof error.code === "number") {
           resolve({
             admitted: false,
             reasonCode: "denied",
-            detail: `control-plane admission check (${request.source}) denied the spawn (exit ${
-              (error as { code: number }).code
-            })`,
+            detail: `control-plane admission check (${request.source}) denied the spawn (exit ${error.code})`,
           });
           return;
         }

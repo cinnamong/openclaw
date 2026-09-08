@@ -153,12 +153,9 @@ export async function repairLoadedGatewayServiceForStart(
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
     .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })
-    .catch(() => ({ kind: "unknown" as const, detail: "" }));
-  if (capability && capability.kind !== "writable") {
-    assertServiceDefinitionWritable({
-      kind: capability.kind,
-      detail: "Service definition cannot be safely modified.",
-    });
+    .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+  if (capability) {
+    assertServiceDefinitionWritable(capability);
   }
   if (
     hasGatewayServiceLauncherOverride(params.state.command) ||
@@ -200,11 +197,8 @@ export async function repairLoadedGatewayServiceForStart(
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     throw new Error(tokenResolution.unavailableReason);
@@ -250,11 +244,9 @@ export async function repairLoadedGatewayServiceForStart(
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {

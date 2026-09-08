@@ -23,6 +23,7 @@ import type {
   CronJobState,
   CronSchedule,
   CronStoredJob,
+  CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
@@ -31,11 +32,7 @@ import {
   normalizeStreamScheduleBounds,
   resolveEveryAnchorMs,
 } from "./jobs-scheduling.js";
-import {
-  reconcileScheduledToolPolicy,
-  reconcileToolsAllowProvenance,
-  stampScheduledToolPolicy,
-} from "./jobs-tool-policy.js";
+import { reconcileToolsAllowAuthority } from "./jobs-tool-policy.js";
 import {
   assertAnnounceDeliveryChannelSupport,
   assertTimeScheduleSatisfiable,
@@ -187,7 +184,11 @@ function validateFullJob(
   if (context.kind !== "declarative") {
     validateCapabilities();
   }
-  assertMainSessionAgentId(job, context.defaultAgentId);
+  assertMainSessionAgentId(
+    job,
+    context.defaultAgentId,
+    context.kind === "patch" ? context.patch : undefined,
+  );
   assertDeliverySupport(job);
   assertAnnounceDeliveryChannelSupport(
     job,
@@ -210,6 +211,7 @@ export function createJob(
   opts?: DeliveryValidationOptions & {
     scheduledToolPolicy?: CronScheduledToolPolicy;
     toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
   },
 ): CronStoredJob {
   const now = state.deps.nowMs();
@@ -275,11 +277,13 @@ export function createJob(
   // New trusted jobs are explicit by construction. Agent-runtime callers are
   // required to arrive with a creator cap before the service can apply this default.
   applyDefaultCronToolsAllow(job);
-  stampScheduledToolPolicy(job, opts?.scheduledToolPolicy);
-  reconcileToolsAllowProvenance({
+  reconcileToolsAllowAuthority({
     job,
+    previouslyUsedToolRuntime: false,
     explicitlyMutatesToolsAllow: true,
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
     toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
   });
   validateFullJob(
     job,
@@ -305,6 +309,7 @@ export function applyJobPatch(
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
     toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
@@ -377,18 +382,14 @@ export function applyJobPatch(
     // Ordinary edits to an existing capless job intentionally remain legacy.
     applyDefaultCronToolsAllow(job);
   }
-  reconcileScheduledToolPolicy({
+  reconcileToolsAllowAuthority({
     job,
     previouslyUsedToolRuntime,
     explicitlyMutatesToolsAllow:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
     scheduledToolPolicy: opts?.scheduledToolPolicy,
-  });
-  reconcileToolsAllowProvenance({
-    job,
-    explicitlyMutatesToolsAllow:
-      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
     toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
   });
   if (patch.delivery) {
     const implicitMode = resolveCronDeliveryPlan(job).mode;
@@ -478,6 +479,7 @@ export function applyDeclarativeJobSpec(
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
     toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
@@ -526,16 +528,13 @@ export function applyDeclarativeJobSpec(
       applyDefaultCronToolsAllow(job);
     }
   }
-  reconcileScheduledToolPolicy({
+  reconcileToolsAllowAuthority({
     job,
     previouslyUsedToolRuntime,
     explicitlyMutatesToolsAllow: explicitlyDeclaresToolsAllow,
     scheduledToolPolicy: opts.scheduledToolPolicy,
-  });
-  reconcileToolsAllowProvenance({
-    job,
-    explicitlyMutatesToolsAllow: explicitlyDeclaresToolsAllow,
     toolsAllowProvenance: opts.toolsAllowProvenance,
+    toolsAllowExecTarget: opts.toolsAllowExecTarget,
   });
   const delivery = resolveInitialCronDelivery(input);
   if (delivery) {

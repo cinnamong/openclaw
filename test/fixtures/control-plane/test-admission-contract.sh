@@ -25,3 +25,4 @@ if [ "${CP_TEST_DECISION:-go}" = "go" ]; then
   exit 0
 fi
 exit 3
+

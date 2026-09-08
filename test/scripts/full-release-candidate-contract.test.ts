@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateRequest,
+  fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
@@ -19,6 +20,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Golden v2 request bytes bind the complete effective reported-issues inventory.
+const CANONICAL_REQUEST_JSON =
+  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v2","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
+const CANONICAL_REQUEST_SHA256 = "eb44f56c41111dfe83d087148eb5f61cc7823525e9d9d434443872d2b42462c4";
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,10 +57,17 @@ function replaceBindingRequest(
   const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
   binding.request = request;
   binding.requestSha256 = canonicalTestSha256(request);
-  binding.evidenceArtifact.name = `full-release-candidate-v1-${binding.requestSha256}`;
+  binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
 }
 
 describe("full release candidate contract", () => {
+  it("uses the canonical request digest directly in the evidence artifact name", () => {
+    const requestSha256 = "a".repeat(64);
+    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
+      `full-release-candidate-v2-${requestSha256}`,
+    );
+  });
+
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(
@@ -67,11 +80,11 @@ describe("full release candidate contract", () => {
     expect(request.upgradeSurvivorScenarios).toContain("acpx-openclaw-tools-bridge");
     expect(request.upgradeSurvivorScenarios).not.toContain("prerelease-plugin-registry");
     expect(request.upgradeSurvivorScenarios).not.toContain("sqlite-volume");
+    expect(request.packagePublished).toBe(false);
     expect(canonicalTestJson(request)).toBe(canonicalTestJson(reorderedRequest));
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reorderedRequest));
-    expect(canonicalTestSha256(request)).toBe(
-      "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
-    );
+    expect(canonicalTestJson(request)).toBe(CANONICAL_REQUEST_JSON);
+    expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
   });
 
   it("canonicalizes equivalent baseline and scenario set ordering", () => {
@@ -102,6 +115,7 @@ describe("full release candidate contract", () => {
     ["survivor scenarios", { upgradeSurvivorScenarios: "base" }],
     ["frozen omissions", { allowFrozenTargetScenarioOmissions: true }],
     ["changelog policy", { allowUnreleasedChangelog: true }],
+    ["package provenance", { packagePublished: true }],
     ["shared image policy", { sharedImagePolicy: "existing-only" }],
   ])("changes the request digest when %s changes", (_label, overrides) => {
     const baseline = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
@@ -114,6 +128,12 @@ describe("full release candidate contract", () => {
     expect(() => validateFullReleaseCandidateRequest({ ...request, ignored: true })).toThrow(
       "keys must be exactly",
     );
+    expect(() =>
+      validateFullReleaseCandidateRequest({
+        ...request,
+        packagePublished: "true",
+      }),
+    ).toThrow("packagePublished must be boolean");
     expect(() =>
       validateFullReleaseCandidateRequest({
         ...request,
@@ -161,10 +181,10 @@ describe("full release candidate contract", () => {
       requestOutputPath,
     ]);
     expect(requestResult.status, requestResult.stderr).toBe(0);
-    const requestValue = JSON.parse(readFileSync(requestOutputPath, "utf8"));
+    expect(readFileSync(requestOutputPath, "utf8")).toBe(CANONICAL_REQUEST_JSON);
     expect(JSON.parse(requestResult.stdout)).toEqual({
-      requestJson: canonicalTestJson(requestValue).trimEnd(),
-      requestSha256: "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
+      requestJson: CANONICAL_REQUEST_JSON.trimEnd(),
+      requestSha256: CANONICAL_REQUEST_SHA256,
     });
 
     const manifestInputPath = join(root, "manifest-input.json");
@@ -185,7 +205,7 @@ describe("full release candidate contract", () => {
     });
 
     const evidenceArtifact = fullReleaseCandidateArtifact(
-      `full-release-candidate-v1-${manifestValue.requestSha256 as string}`,
+      `full-release-candidate-v2-${manifestValue.requestSha256 as string}`,
       {
         id: "104",
         digest: "4".repeat(64),
@@ -242,7 +262,7 @@ describe("full release candidate contract", () => {
       "--manifest",
       manifestOutputPath,
       "--artifact-name",
-      "full-release-candidate-v1-deadbeef",
+      "full-release-candidate-v2-deadbeef",
       "--artifact-id",
       "104",
       "--artifact-digest",
@@ -260,6 +280,12 @@ describe("full release candidate contract", () => {
 
   it("fails closed on cross-request, cross-package, and cross-attempt evidence", () => {
     const value = manifest();
+    expect(
+      runManifestContract({
+        ...value,
+        schema: "openclaw.full-release-candidate/v1",
+      }).stderr,
+    ).toContain("manifest schema is invalid");
     expect(
       runManifestContract({
         ...value,
@@ -284,6 +310,12 @@ describe("full release candidate contract", () => {
     expect(
       runManifestContract({
         ...value,
+        publisher: { ...value.publisher, runAttempt: "2" },
+      }).stderr,
+    ).toContain("publisher was not bound to the declared producer attempt");
+    expect(
+      runManifestContract({
+        ...value,
         producer: { ...value.producer, jobId: "prepare_docker_e2e_image" },
       }).stderr,
     ).toContain("positive decimal string");
@@ -292,6 +324,16 @@ describe("full release candidate contract", () => {
   it.each([
     ["producer job id", (binding) => void (binding.producer.jobId = "202")],
     ["producer job name", (binding) => void (binding.producer.jobName = "different producer job")],
+    ["publisher job id", (binding) => void (binding.publisher.jobId = "203")],
+    [
+      "publisher job name",
+      (binding) => void (binding.publisher.jobName = "different publisher job"),
+    ],
+    [
+      "publisher workflow path",
+      (binding) =>
+        void (binding.publisher.workflowPath = ".github/workflows/candidate-evidence-test.yml"),
+    ],
     [
       "producer workflow path",
       (binding) =>
@@ -301,6 +343,7 @@ describe("full release candidate contract", () => {
       "producer run id tuple",
       (binding) => {
         binding.producer.runId = "78";
+        binding.publisher.runId = "78";
         binding.package.artifact.runId = "78";
         binding.prepublishPluginRegistry.artifact.runId = "78";
         binding.sharedImage.artifact.runId = "78";
@@ -311,6 +354,7 @@ describe("full release candidate contract", () => {
       "producer run attempt tuple",
       (binding) => {
         binding.producer.runAttempt = "2";
+        binding.publisher.runAttempt = "2";
         binding.package.artifact.runAttempt = "2";
         binding.prepublishPluginRegistry.artifact.runAttempt = "2";
         binding.sharedImage.artifact.runAttempt = "2";
@@ -322,6 +366,7 @@ describe("full release candidate contract", () => {
       (binding) => {
         replaceBindingRequest(binding, { repository: "openclaw/other" });
         binding.producer.repository = binding.request.repository;
+        binding.publisher.repository = binding.request.repository;
       },
     ],
     [
@@ -329,6 +374,7 @@ describe("full release candidate contract", () => {
       (binding) => {
         replaceBindingRequest(binding, { toolingSha: "8".repeat(40) });
         binding.producer.workflowSha = binding.request.toolingSha;
+        binding.publisher.workflowSha = binding.request.toolingSha;
       },
     ],
     [

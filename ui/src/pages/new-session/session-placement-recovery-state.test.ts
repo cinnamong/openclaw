@@ -38,39 +38,44 @@ describe("pending session placement recovery state", () => {
     );
   });
 
-  it("stages an idempotent create before the Gateway request", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = pending.stageCreate({
-      agentId: "cloud",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-      message: "run remotely",
-      gatewayUrl: "ws://gateway.example",
-      recoveryScope: "principal-a",
-      createParams: {
+  it.each([undefined, true, false, "auto"] as const)(
+    "stages an idempotent create with Fast Mode %s before the Gateway request",
+    (fastMode) => {
+      const pending = new PendingSessionPlacementRecoveryState();
+      const createParams = pending.stageCreate({
         agentId: "cloud",
-        message: "",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
+        message: "run remotely",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: {
+          agentId: "cloud",
+          message: "",
+          thinkingLevel: "high",
+          ...(fastMode !== undefined ? { fastMode } : {}),
+          contextWindow: "large",
+          worktree: true,
+        },
+      });
+
+      expect(createParams).toMatchObject({
+        agentId: "cloud",
+        key: expect.stringMatching(/^agent:cloud:dashboard:/),
         thinkingLevel: "high",
+        ...(fastMode !== undefined ? { fastMode } : {}),
         contextWindow: "large",
         worktree: true,
-      },
-    });
-
-    expect(createParams).toMatchObject({
-      agentId: "cloud",
-      key: expect.stringMatching(/^agent:cloud:dashboard:/),
-      thinkingLevel: "high",
-      contextWindow: "large",
-      worktree: true,
-    });
-    expect(
-      readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
-    ).toMatchObject({
-      phase: "creating",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" },
-      sessionKey: createParams?.key,
-      createParams,
-    });
-  });
+      });
+      expect(
+        readSessionPlacementRecovery("ws://gateway.example", "principal-a", pending.sessionKey),
+      ).toMatchObject({
+        phase: "creating",
+        target: { kind: "profile", profileId: "aws", machineClass: "fast" },
+        sessionKey: createParams?.key,
+        createParams,
+      });
+    },
+  );
 
   it("preserves the requested permission mode in placement recovery", () => {
     const pending = new PendingSessionPlacementRecoveryState();
@@ -254,6 +259,7 @@ describe("pending session placement recovery state", () => {
       createParams: {
         agentId: "cloud",
         incognito: true,
+        fastMode: true,
         message: "",
         worktree: true,
       },
@@ -263,6 +269,7 @@ describe("pending session placement recovery state", () => {
     expect(createParams).toMatchObject({
       agentId: "cloud",
       incognito: true,
+      fastMode: true,
       worktree: true,
     });
     expect(createParams).not.toHaveProperty("key");
@@ -312,7 +319,7 @@ describe("pending session placement recovery state", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("captures creating recovery without sharing mutable payloads", () => {
+  it("captures named creating recovery without sharing mutable payloads", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
@@ -322,7 +329,13 @@ describe("pending session placement recovery state", () => {
         attachments: [{ type: "image" }],
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
+        createParams: {
+          agentId: "cloud",
+          message: "",
+          displayName: "Repair naming",
+          worktreeName: "my-explicit-branch",
+          worktree: true,
+        },
       }),
     ).not.toBeNull();
 
@@ -330,7 +343,11 @@ describe("pending session placement recovery state", () => {
     expect(captured).toMatchObject({
       phase: "creating",
       message: "run remotely",
-      createParams: { key: pending.sessionKey },
+      createParams: {
+        key: pending.sessionKey,
+        displayName: "Repair naming",
+        worktreeName: "my-explicit-branch",
+      },
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);

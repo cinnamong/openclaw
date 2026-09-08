@@ -129,7 +129,7 @@ describe("system systemd ownership", () => {
 
       expect(capability).toEqual({
         kind,
-        detail: `System service ${unitName} requires its privileged deployment owner.`,
+        reason: kind === "sealed" ? "system-owned" : "system-ownership-unverified",
       });
       expect(JSON.stringify(capability)).not.toContain("manager-secret-canary");
       // Denial permits only system ownership probes, never user-manager or artifact reads.
@@ -173,7 +173,7 @@ describe("system systemd ownership", () => {
 
   it("shares one timeout budget across system-manager ownership probes", async () => {
     let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     execFileUtf8.mockImplementation(async (_command, args) => {
       now += 20;
       return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
@@ -203,28 +203,37 @@ describe("system systemd ownership", () => {
     }
   });
 
-  it("fails closed when the system manager cannot be queried", async () => {
-    state.systemctl = {
-      stdout: "",
-      stderr: "Failed to connect to bus: Permission denied",
-      code: 1,
-      termination: "exit",
-    };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: {
-        status: "unverifiable",
-        unitName: "openclaw-gateway.service",
-        operation: "systemctl",
-        detail: "Failed to connect to bus: Permission denied",
-      },
-    });
-  });
+  it.each([60_000, -60_000])(
+    "keeps the shared timeout budget through a %s ms wall-clock step",
+    async (stepMs) => {
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      execFileUtf8.mockImplementation(async (_command, args) => {
+        offset = stepMs;
+        return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
+      });
+      try {
+        await expect(
+          assertNoSystemSystemdOwnership("openclaw-gateway.service", 5_000),
+        ).resolves.toBeUndefined();
+        const timeouts = execFileUtf8.mock.calls.map((call) => call[2]?.timeout ?? 0);
+        expect(timeouts).toHaveLength(3);
+        // Only real elapsed time (tens of ms) may leave the budget; the clock step must
+        // neither drain it to the 1 ms floor nor inflate it past the budget.
+        expect(timeouts.every((timeout) => timeout > 4_000 && timeout <= 5_000)).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each([
+    "Failed to connect to bus: Permission denied",
     "spawn systemctl ENOENT",
     "systemctl not available",
     "System has not been booted with systemd as init system",
+    "Failed to connect to bus: No such file or directory",
   ])("fails closed when manager absence cannot be proven: %s", async (detail) => {
     state.systemctl = { stdout: "", stderr: detail, code: 1, termination: "exit" };
 
@@ -237,23 +246,6 @@ describe("system systemd ownership", () => {
       },
     });
     expect(fs.lstat).not.toHaveBeenCalled();
-  });
-
-  it("does not mistake a missing system bus for a missing unit", async () => {
-    state.systemctl = {
-      stdout: "",
-      stderr: "Failed to connect to bus: No such file or directory",
-      code: 1,
-      termination: "exit",
-    };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: {
-        status: "unverifiable",
-        operation: "systemctl",
-        detail: "Failed to connect to bus: No such file or directory",
-      },
-    });
   });
 
   it.each(["exit", "timeout", "signal"] as const)(

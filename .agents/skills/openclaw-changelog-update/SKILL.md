@@ -6,7 +6,8 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for changelog rewrites and GitHub release-note source text. For regular
-beta/stable, run it after the Code SHA passes Full Release Validation. For
+beta/stable, draft substantive version-matched notes during preparation, then
+finalize them after the Code SHA passes Full Release Validation. For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -27,8 +28,9 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: the exact green Code SHA. The changelog commit created from this
-  input becomes the Release SHA.
+- Target ref: the exact selected preparation SHA for draft notes, or the green
+  Code SHA for final notes. Only the latter's changelog-only commit becomes the
+  Release SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -36,15 +38,19 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Confirm the release branch is at the fully validated Code SHA:
+1. Record whether this is preparation or finalization:
    - `git fetch --tags origin`
    - confirm clean `git status -sb`
-   - record `git rev-parse HEAD` as the Code SHA
-   - record the successful Full Release Validation run id and attempt
-   - stop if any product/version/backport change is still pending
+   - record `git rev-parse HEAD` as the exact target for history collection
+   - for preparation, generate real notes for this selected tree; refresh them
+     after an operator-approved rebase or additional selected changes
+   - for finalization, require the fully validated Code SHA, record its
+     successful Full Release Validation run id and attempt, and stop if any
+     product/version/backport change is still pending
 2. Audit history, including direct commits:
-   - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
-   - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
    - also inspect `--since='24 hours ago'` when main moved during the release.
 3. Generate the complete contribution record and editorial manifest before
    writing grouped prose:
@@ -69,6 +75,13 @@ every human `Thanks @...` attribution.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
 <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
+   Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
+   in active source are classified separately only when issue/PR resolution
+   fails and a live same-repository Actions lookup confirms the exact run ID.
+   Any ordinary occurrence of that number in active source, notes, or the
+   contribution record remains a strict issue/PR requirement. Confirmed runs
+   appear as `workflowRuns` in verification output and the manifest, never as
+   PR associations or contributor credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
@@ -93,10 +106,25 @@ every human `Thanks @...` attribution.
      target prose, or target record. The manifest and generated provenance retain
      each tag plus the exact excluded PR inventory and count for deterministic
      candidate validation
-   - source PR discovery combines merged GitHub commit associations with merged
-     PR references explicitly present in active commit subjects/bodies so
-     cherry-picks and squash commits remain accounted for. Resolve every
-     association page and exclude PRs merged after the target release commit
+   - source PR discovery bounds GitHub commit associations to the selected target
+     history, or the frozen main history for canonical carriers. A contextual
+     source reference becomes a contribution only when its merged commit is
+     reachable in the target history and its merge time is within the target.
+     Keep all references resolvable, but do not promote unrelated PRs merely
+     because they merge while release preparation continues. Explicit seeds
+     retain their historical membership and remain seed-only unless independently
+     proven in-range. Resolve every association page; existing canonical,
+     cherry-pick, and provenance contracts remain authoritative.
+   - explicit multi-commit reverts require a revert subject and one standalone
+     `Reverts <full SHA> and <full SHA>.` declaration (comma-separated lists
+     with final `and` also work). The exact ending ` to restore the previous
+behavior.` is accepted. Duplicate, abbreviated, embedded, or repeated
+     declarations do not establish reversal. Each named commit must be a
+     single-parent ancestor, and reverse-applying all named patches must
+     reproduce the complete revert tree. Recognized declarations that fail
+     this proof stop verification. Proof uses private Git index/object storage
+     without hooks or external diffs; canonical single-revert and
+     revert-of-revert accounting stays intact.
    - canonicalize backports to the original merged PR on `main`: explicit
      cherry-pick origins win, then a unique normalized-subject match requires
      the same author and an overlapping changed path. Suppress release/backport
@@ -167,13 +195,17 @@ every human `Thanks @...` attribution.
      prose but are never rendered as a public `#### Direct commits` dump. Add
      direct-commit credit to a grouped bullet only when it shares an explicit
      closing issue reference or at least two distinctive subject terms
-   - the verifier rejects `docs`, `test`, `refactor`, `ci`, `build`, `chore`,
-     and `style` PRs in Highlights, Changes, or Fixes. Keep those internal
-     contributions in the complete PR record, but do not give them editorial
-     release-note space
-   - classify internal-only work from conventional prefixes and clear title
-     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
-     untyped title is not automatically editorial
+   - the verifier rejects ordinary `docs`, `test`, `refactor`, `ci`, `build`,
+     `chore`, and `style` PRs in Highlights, Changes, or Fixes. An explicit
+     Conventional Commits `!` marker makes any type editorial-eligible; include
+     its verified user-facing breaking change and migration guidance with the
+     original PR ref and credit. Keep other internal contributions only in the
+     complete PR record
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
@@ -259,7 +291,10 @@ every human `Thanks @...` attribution.
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
 - stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
-- record the new commit as the Release SHA and require
+- preparation stops here: these are draft notes for the selected tree, not
+  publication evidence. Continue version/source preparation and Code SHA proof
+  through the release-maintainer workflow
+- for finalization, record the new commit as the Release SHA and require
   `git diff --name-only <code-sha>..<release-sha>` to print only
   `CHANGELOG.md`
 - push the release branch without rebasing it onto moving `main`

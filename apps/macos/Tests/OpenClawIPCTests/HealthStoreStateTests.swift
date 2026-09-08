@@ -7,10 +7,10 @@ import Testing
 
 struct HealthStoreStateTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_TEST_HEALTH_RENDER_DIR"] != nil))
-    @MainActor func healthSettingsRender() async throws {
+    @MainActor func `health settings render`() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let output = URL(fileURLWithPath: try #require(environment["OPENCLAW_TEST_HEALTH_RENDER_DIR"]))
-        let home = URL(fileURLWithPath: try #require(environment["CFFIXED_USER_HOME"]))
+        let output = try URL(fileURLWithPath: #require(environment["OPENCLAW_TEST_HEALTH_RENDER_DIR"]))
+        let home = try URL(fileURLWithPath: #require(environment["CFFIXED_USER_HOME"]))
         try #require(FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath() == home)
         try #require(URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath() == home)
         let suite = try #require(AppProfile.current.defaultsSuiteName)
@@ -32,27 +32,41 @@ struct HealthStoreStateTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.isPaused = true
-        for (name, fields, expected) in [
-            ("ready", ["running": true, "connected": true, "lifecycle": "ready"] as [String: Any],
-             "Telegram ready"),
-            ("startup-grace", [
-                "running": true, "connected": false, "lifecycle": "starting", "lastStartAt": 1772798370000,
-            ],
-             "Telegram running"),
-            ("stale-socket", [
-                "running": true, "connected": true, "lifecycle": "ready", "healthState": "stale-socket",
-                "lastStartAt": 1772794800000, "lastTransportActivityAt": 1772796540000,
-            ],
-             "Telegram degraded · stale-socket"),
-            ("disabled", ["enabled": false, "running": false], "Telegram disabled"),
+        for (name, channelId, fields, expected) in [
+            (
+                "ready",
+                "telegram",
+                ["running": true, "connected": true, "lifecycle": "ready"] as [String: Any],
+                "Telegram ready"),
+            (
+                "startup-grace",
+                "telegram",
+                [
+                    "running": true, "connected": false, "lifecycle": "starting", "lastStartAt": 1_772_798_370_000,
+                ],
+                "Telegram running"),
+            (
+                "stale-socket",
+                "telegram",
+                [
+                    "running": true, "connected": true, "lifecycle": "ready", "healthState": "stale-socket",
+                    "lastStartAt": 1_772_794_800_000, "lastTransportActivityAt": 1_772_796_540_000,
+                ],
+                "Telegram degraded · stale-socket"),
+            ("disabled", "telegram", ["enabled": false, "running": false], "Telegram disabled"),
+            (
+                "probe-permission",
+                "imessage",
+                Self.permissionProbeChannel,
+                "iMessage degraded · \(Self.permissionProbeError) (status unknown)"),
         ] {
-            try Self.withSnapshot(["telegram": fields]) { store in
-                let hosting = NSHostingView(rootView: GeneralSettings(state: state, page: .connection, isActive: false)
+            try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
+                let hosting = NSHostingView(rootView: ConnectionSettingsView(state: state, isActive: false)
                     // Capture the view's light canvas, not transparent text over the window's excluded background.
-                    .background(.white)
-                    .environment(tailscale)
-                    .environment(\.locale, Locale(identifier: "en_US"))
-                    .environment(\.colorScheme, .light))
+                        .background(.white)
+                        .environment(tailscale)
+                        .environment(\.locale, Locale(identifier: "en_US"))
+                        .environment(\.colorScheme, .light))
                 hosting.appearance = NSAppearance(named: .aqua)
                 hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 1000)
                 let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
@@ -107,7 +121,7 @@ struct HealthStoreStateTests {
                 "linked": true,
                 "authAgeMs": 1,
                 "probe": ["ok": false, "status": 503, "error": "gateway connect failed", "elapsedMs": 12],
-                "lastProbeAt": 1772798400000,
+                "lastProbeAt": 1_772_798_400_000,
             ],
         ], order: ["whatsapp"]) { store in
             switch store.state {
@@ -132,22 +146,25 @@ struct HealthStoreStateTests {
     }
 
     @Test @MainActor func `current channel probe failure degrades state`() throws {
-        try Self.withSnapshot([
-            "telegram": [
+        for (channelId, fields, label, expected) in [
+            ("imessage", Self.permissionProbeChannel, "iMessage", "\(Self.permissionProbeError) (status unknown)"),
+            // Generic imsg timeouts exercise formatting, not the FDA-only public probe redactor.
+            ("imessage", [
+                "probe": ["ok": false, "error": "imsg rpc timeout (chats.list)"],
+                "running": true, "lifecycle": "starting", "lastStartAt": 1_772_798_395_000,
+            ], "iMessage", "Health check timed out"),
+            ("telegram", [
                 "probe": ["ok": false, "status": 503, "error": "gateway connect failed", "elapsedMs": 12],
-                "lastProbeAt": 1772798400000,
+                "lastProbeAt": 1_772_798_400_000,
                 "running": true,
                 "connected": true,
                 "lifecycle": "ready",
-            ],
-        ]) { store in
-            switch store.state {
-            case let .degraded(message):
-                #expect(message.contains("gateway connect failed"))
-            default:
-                Issue.record("Expected degraded state when a current channel probe fails")
+            ], "Telegram", "gateway connect failed (status 503, 12ms)"),
+        ] {
+            try Self.withSnapshot([channelId: fields], order: [channelId]) { store in
+                #expect(store.state == .degraded(expected))
+                #expect(store.summaryLine == "\(label) degraded · \(expected)")
             }
-            #expect(store.summaryLine.contains("gateway connect failed"))
         }
     }
 
@@ -176,7 +193,7 @@ struct HealthStoreStateTests {
                 "running": running,
                 "connected": false,
                 "lifecycle": lifecycle,
-                "lastStartAt": 1772798370000,
+                "lastStartAt": 1_772_798_370_000,
             ], unlinkedFirst: unlinkedFirst) { store in
                 #expect(store.state == (unlinkedFirst ? .degraded("Not linked") : .ok))
                 #expect(store.summaryLine.contains("Telegram"))
@@ -199,11 +216,11 @@ struct HealthStoreStateTests {
             "connected": false,
             "lifecycle": lifecycle,
             "healthState": healthState,
-            "lastStartAt": 1772798370000,
+            "lastStartAt": 1_772_798_370_000,
         ]
         if lifecycle == "recovering" {
-            fields["lastStartAt"] = 1772794800000
-            fields["lastDisconnect"] = ["at": 1772798395000]
+            fields["lastStartAt"] = 1_772_794_800_000
+            fields["lastDisconnect"] = ["at": 1_772_798_395_000]
         }
         for unlinkedFirst in [false, true] {
             try Self.withChannel(fields, channelId: "matrix", unlinkedFirst: unlinkedFirst) { store in
@@ -225,11 +242,11 @@ struct HealthStoreStateTests {
             "running": running,
             "connected": false,
             "lifecycle": lifecycle,
-            "lastStartAt": 1772798100000,
+            "lastStartAt": 1_772_798_100_000,
             "healthState": reason,
         ]
         if lifecycle == "recovering" {
-            fields["lastDisconnect"] = ["at": 1772798220000]
+            fields["lastDisconnect"] = ["at": 1_772_798_220_000]
         }
         for unlinkedFirst in [false, true] {
             try Self.withChannel(fields, unlinkedFirst: unlinkedFirst) { store in
@@ -247,13 +264,13 @@ struct HealthStoreStateTests {
             "running": true,
             "connected": true,
             "lifecycle": "ready",
-            "lastStartAt": 1772794800000,
+            "lastStartAt": 1_772_794_800_000,
             "healthState": reason,
         ]
         if reason == "stale-socket" {
-            fields["lastTransportActivityAt"] = 1772796540000
+            fields["lastTransportActivityAt"] = 1_772_796_540_000
         } else {
-            fields["lastTransportActivityAt"] = 1772798395000
+            fields["lastTransportActivityAt"] = 1_772_798_395_000
             fields["ingressUnavailable"] = true
         }
         for unlinkedFirst in [false, true] {
@@ -338,6 +355,17 @@ struct HealthStoreStateTests {
         }
     }
 
+    private static let permissionProbeError =
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway."
+
+    private static var permissionProbeChannel: [String: Any] {
+        // Public health preserves this sanitized FDA error without an HTTP status; startup has no lastError yet.
+        [
+            "probe": ["ok": false, "error": self.permissionProbeError],
+            "running": true, "lifecycle": "starting", "lastStartAt": 1_772_798_395_000,
+        ]
+    }
+
     private static var unlinkedWhatsApp: [String: Any] {
         [
             "configured": true, "linked": false, "running": false, "connected": false,
@@ -370,16 +398,16 @@ struct HealthStoreStateTests {
             account.merge(fields) { _, value in value }
             return account
         }
-        // Fixed Gateway response time: fresh starts are 30s old; expired starts are 5m old.
+        // Fixed Gateway response time keeps grace and expired lifecycle fixtures deterministic.
         let fixture: [String: Any] = [
             "ok": true,
-            "ts": 1772798400000,
+            "ts": 1_772_798_400_000,
             "durationMs": 2,
             "channels": accounts,
             "channelOrder": order,
             "channelLabels": [
                 "telegram": "Telegram", "matrix": "Matrix", "whatsapp": "WhatsApp", "zalouser": "Zalo Personal",
-                "disabled": "Disabled",
+                "disabled": "Disabled", "imessage": "iMessage",
             ],
             "heartbeatSeconds": 60,
             "sessions": ["path": "/tmp/sessions.json", "count": 0, "recent": []],

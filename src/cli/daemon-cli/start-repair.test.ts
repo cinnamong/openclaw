@@ -129,7 +129,6 @@ describe("repairLoadedGatewayServiceForStart", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
-      tokenRefConfigured: false,
       warnings: [],
     });
     readConfigFileSnapshotForWriteMock.mockResolvedValue({
@@ -146,14 +145,36 @@ describe("repairLoadedGatewayServiceForStart", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["sealed", "unknown"] as const)(
-    "denies definition repair before config or token work when authority is %s",
-    async (kind) => {
+  it.each([
+    {
+      kind: "sealed",
+      reason: "foreign-owner",
+      artifact: "service-file",
+      guidance: "deployment owner",
+    },
+    {
+      kind: "unknown",
+      reason: "unsafe-permissions",
+      artifact: "service-directory",
+      guidance: "chmod go-w",
+    },
+    {
+      kind: "unknown",
+      reason: "inspection-failed",
+      artifact: "service-file",
+      guidance: "Inspect service definition access",
+    },
+  ] as const)(
+    "explains $reason without exposing raw details or doing config/token work",
+    async ({ guidance, ...capability }) => {
       const install = vi.fn();
       const service = {
         install,
         isLoaded: vi.fn(async () => true),
-        readDefinitionMutationCapability: vi.fn(async () => ({ kind, detail: "protected" })),
+        readDefinitionMutationCapability: vi.fn(async () => ({
+          ...capability,
+          detail: "repair-inspection-secret-canary",
+        })),
       };
       const state: GatewayServiceState = {
         installed: true,
@@ -165,15 +186,22 @@ describe("repairLoadedGatewayServiceForStart", () => {
           environment: { HOME: "/home/openclaw" },
         },
       };
-      await expect(
-        repairLoadedGatewayServiceForStart({
-          service,
-          state,
-          issues: [{ code: "missing-program", message: "missing" }],
-          json: true,
-          stdout: process.stdout,
-        }),
-      ).rejects.toThrow(`SERVICE_DEFINITION_${kind.toUpperCase()}`);
+      const params = {
+        service,
+        state,
+        issues: [{ code: "missing-program" as const, message: "missing" }],
+        json: true,
+        stdout: process.stdout,
+      };
+      for (const action of ["start", "restart"] as const) {
+        const repair =
+          action === "restart"
+            ? repairLoadedGatewayServiceForStart({ ...params, action })
+            : repairLoadedGatewayServiceForStart(params);
+        await expect(repair).rejects.toThrow(`SERVICE_DEFINITION_${capability.kind.toUpperCase()}`);
+        await expect(repair).rejects.toThrow(guidance);
+        await expect(repair).rejects.not.toThrow("secret-canary");
+      }
       expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
       expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
       expect(install).not.toHaveBeenCalled();
@@ -541,4 +569,53 @@ describe("repairLoadedGatewayServiceForStart", () => {
     expect(installMock).not.toHaveBeenCalled();
     expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { action: "start", probe: "throws" },
+    { action: "restart", probe: "throws" },
+    { action: "start", probe: "returns false" },
+    { action: "restart", probe: "returns false" },
+  ] as const)(
+    "fails $action repair when the post-install probe $probe",
+    async ({ action, probe }) => {
+      const error = new Error("systemd show failed");
+      const service = {
+        install: vi.fn(async () => {}),
+        isLoaded: vi.fn(async () => {
+          if (probe === "throws") {
+            throw error;
+          }
+          return false;
+        }),
+      };
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: {},
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          environment: { HOME: "/home/openclaw" },
+        },
+      };
+      const params = {
+        service,
+        state,
+        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      };
+      const repair =
+        action === "restart"
+          ? repairLoadedGatewayServiceForStart({ ...params, action })
+          : repairLoadedGatewayServiceForStart(params);
+
+      if (probe === "throws") {
+        await expect(repair).rejects.toBe(error);
+      } else {
+        await expect(repair).rejects.toThrow("Gateway service is not loaded after repair.");
+      }
+      expect(service.install).toHaveBeenCalledTimes(1);
+    },
+  );
 });

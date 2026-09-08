@@ -119,6 +119,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw owned by OpenAI?">
+    No. OpenClaw is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3). OpenAI is one of several donors, and its creator works there. Donors do not own, control, or direct the project. Codex is one [agent harness](/concepts/agent-runtimes) plugin among several, and no lab's model is privileged in the code.
+
+  </Accordion>
+
+  <Accordion title="What does OpenClaw send to the Foundation?">
+    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see "Is all data used with OpenClaw saved locally?" below. Details: [Usage telemetry and update checks](/gateway/telemetry).
+
+  </Accordion>
+
+  <Accordion title="How is OpenClaw funded, and how does that compare?">
+    The Foundation is funded by donations and has no product to sell: no paid tier, no hosted service, no token. It is not venture-backed. Some other self-hosted agents are built by venture-funded companies that sell a subscription their agent offers during setup. That is a difference in incentives, not a judgment of their engineering; see the [governance comparison](/start/why-openclaw#governance).
+
+  </Accordion>
+
   <Accordion title="What are the advantages vs Claude Code for web development?">
     OpenClaw is an **assistant and coordination layer**, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
 
@@ -154,7 +169,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - **Global default + current session**: Owner/admin `/model <model> -g` (or `--global`) updates `agents.defaults.model`.
 
     Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    you set the optional [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
     Example - same model, different per-agent settings:
 
@@ -178,7 +193,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then agent-specific overrides in flat `agents.entries.*.params`. Do not duplicate the same model under nested `agents.entries.*.models["provider/model"].params`; that path is for per-agent model catalog and runtime overrides.
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`. Use `agents.entries.*.models["provider/model"].params` when one agent needs different settings for that model. Flat `agents.entries.*.params` applies across that agent's models and wins over both per-model layers.
 
     See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), [Slash commands](/tools/slash-commands).
 
@@ -197,10 +212,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Bind a Discord thread to a subagent or session target so follow-up messages there stay on that bound session.
 
     - Spawn with `sessions_spawn` using `thread: true` (optionally `mode: "session"` for persistent follow-up).
-    - Or bind manually with `/focus <target>`.
     - `/agents` inspects binding state.
-    - `/session idle <duration|off>` and `/session max-age <duration|off>` control auto-unfocus.
-    - `/unfocus` detaches the thread.
+    - `/session idle <duration|off>` and `/session max-age <duration|off>` control automatic expiry.
+    - `/session unbind` detaches the thread without closing the agent session.
 
     Config: `session.threadBindings.enabled` (global switch), `session.threadBindings.idleHours` (default `24`, `0` disables), `session.threadBindings.maxAgeHours` (default `0` = no hard cap), and `session.threadBindings.spawnSessions` for auto-bind on spawn (default `true`).
 
@@ -232,8 +246,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron run <jobId>
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations run <jobId>
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation).
@@ -252,7 +266,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     openclaw tasks show <lookup>
     ```
 
@@ -269,7 +283,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Debug:
     ```bash
-    openclaw cron runs --id <jobId> --limit 50
+    openclaw automations runs <jobId> --limit 50
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [cron CLI](/cli/cron).
@@ -354,7 +368,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or configure `agents.defaults.skills` / `agents.entries.*.skills` to limit visibility. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
 
-    See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/tools/clawhub).
+    See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/clawhub).
 
   </Accordion>
 
@@ -407,7 +421,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
-    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
+    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox).
 
   </Accordion>
 
@@ -555,7 +569,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     {
       agents: {
         defaults: {
-          workspace: "~/Projects/my-repo",
+          workspace: "~/path/to/my-repo",
         },
       },
     }
@@ -680,8 +694,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - A direct edit that breaks startup or hot reload makes the Gateway fail closed or skip the reload; it does not rewrite `openclaw.json`.
-    - `openclaw doctor --fix` owns repair, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 
@@ -1416,12 +1430,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title="Is it safe to expose OpenClaw to inbound DMs?">
-    Treat inbound DMs as untrusted input. Defaults reduce risk:
+    Yes - on channels that default to **pairing** (most DM-capable channels), a stranger who DMs your bot never reaches the model:
 
-    - Default behavior on DM-capable channels is **pairing**: unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
+    - With the pairing default, unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
     - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
-    Run `openclaw doctor` to surface risky DM policies.
+    A few workspace channels ship different defaults - ClickClack, for example, allows workspace members by default. Check your channel's page, and run `openclaw doctor` to confirm your DM policies look the way you expect.
 
   </Accordion>
 

@@ -44,6 +44,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -59,7 +60,7 @@ const metadataSnapshot: PluginMetadataSnapshot = {
 const resolvePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
 const resolveConfigWidePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
 
-let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
+let resolvePluginRuntimeLoadContext: typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
 let clearRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
@@ -92,8 +93,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../../config/runtime-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("../plugin-metadata-lifecycle.js"));
-    ({ resolvePluginRuntimeLoadContext, buildPluginRuntimeLoadOptions } =
-      await import("./load-context.js"));
+    ({ resolvePluginRuntimeLoadContext } = await import("./load-context.resolve.js"));
+    ({ buildPluginRuntimeLoadOptions } = await import("./load-context.js"));
   });
 
   beforeEach(() => {
@@ -150,7 +151,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       manifestRegistry,
       metadataSnapshot,
       installRecords: {},
-      preferBuiltPluginArtifacts: false,
+      preferBuiltPluginArtifacts: undefined,
     });
     expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
@@ -215,6 +216,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const runtimeConfig = { plugins: {} };
     const sourceConfig = {
       plugins: {
@@ -225,18 +227,19 @@ describe("resolvePluginRuntimeLoadContext", () => {
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     loadConfigMock.mockReturnValue(runtimeConfig);
 
-    const context = resolvePluginRuntimeLoadContext();
+    const context = resolvePluginRuntimeLoadContext({ env });
 
     expect(context.rawConfig).toBe(runtimeConfig);
     expect(context.activationSourceConfig).toBe(sourceConfig);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: runtimeConfig,
-      env: process.env,
+      env,
       manifestRegistry,
     });
   });
 
   it("applies auto-enable against each operation's exact prepared metadata", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { plugins: {} };
     const firstRegistry = { diagnostics: [], plugins: [] };
     const secondRegistry = { diagnostics: [], plugins: [] };
@@ -249,17 +252,17 @@ describe("resolvePluginRuntimeLoadContext", () => {
       .mockReturnValueOnce({ config: secondConfig, changes: [], autoEnabledReasons: {} });
 
     const first = withPluginCache(createPluginCache(), () =>
-      resolvePluginRuntimeLoadContext({ config, metadataSnapshot: firstSnapshot }),
+      resolvePluginRuntimeLoadContext({ config, env, metadataSnapshot: firstSnapshot }),
     );
     const second = withPluginCache(createPluginCache(), () =>
-      resolvePluginRuntimeLoadContext({ config, metadataSnapshot: secondSnapshot }),
+      resolvePluginRuntimeLoadContext({ config, env, metadataSnapshot: secondSnapshot }),
     );
     expect(first.config).toBe(firstConfig);
     expect(second.config).toBe(secondConfig);
     expect(second.manifestRegistry).toBe(secondRegistry);
     expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(2, {
       config,
-      env: process.env,
+      env,
       manifestRegistry: secondRegistry,
       discovery: undefined,
     });

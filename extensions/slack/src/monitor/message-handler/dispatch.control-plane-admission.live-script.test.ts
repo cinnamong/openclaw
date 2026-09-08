@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   admitSlackIngressSpawnOrThrow,
   SlackIngressSpawnAdmissionDeclinedError,
-} from "./dispatch.js";
+} from "./dispatch-admission.js";
 
 const SCRIPT_PATH = fileURLToPath(
   new URL("../../../../../test/fixtures/control-plane/test-admission-contract.sh", import.meta.url),

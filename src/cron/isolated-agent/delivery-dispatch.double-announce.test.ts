@@ -140,6 +140,17 @@ vi.mock("../../sessions/background-session-result.js", () => ({
   commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
 }));
 
+vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
+  buildAssistantReplyContent: vi.fn(),
+  hasAssistantDisplayMediaContent: vi.fn(),
+  hasManagedOutgoingAssistantContent: vi.fn(),
+}));
+
+vi.mock("../../gateway/managed-image-attachments.js", () => ({
+  attachManagedOutgoingMediaToMessage: vi.fn(),
+  removeManagedOutgoingMediaBlocks: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./session.js", () => ({
   loadCronSessionEntryLatest: loadCronSessionEntryLatestMock,
 }));
@@ -191,7 +202,9 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logError } from "../../logger.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { withTempCronHome } from "../isolated-agent.test-harness.js";
+import type { CronDelivery } from "../types.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -251,6 +264,10 @@ function makeBaseParams(overrides: {
     ...makeResolvedDelivery(),
     mode: overrides.resolvedDeliveryMode ?? "explicit",
   } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
+  const delivery: CronDelivery = {
+    mode: "announce",
+    bestEffort: overrides.deliveryBestEffort,
+  };
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
@@ -263,7 +280,7 @@ function makeBaseParams(overrides: {
       sessionKey:
         overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
-      delivery: { mode: "announce", bestEffort: overrides.deliveryBestEffort },
+      delivery,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
@@ -282,6 +299,7 @@ function makeBaseParams(overrides: {
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
     resolvedDelivery,
+    deliveryPlan: resolveCronDeliveryPlan({ delivery }),
     deliveryRequested: overrides.deliveryRequested ?? true,
     undeliveredRunStatus: "ok",
     skipDelivery: undefined,
@@ -1751,6 +1769,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         mediaUrls: undefined,
       }),
     );
+    expect(
+      vi.mocked(appendAssistantMessageToSessionTranscript).mock.calls[0]?.[0],
+    ).not.toHaveProperty("deliveryMirror");
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -2113,6 +2134,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("skips main-session awareness for best-effort deliveries", async () => {
+    mockResolvedOutboundRoute();
     const params = makeBaseParams({
       synthesizedText: "Best-effort cron update.",
       deliveryBestEffort: true,
@@ -2124,13 +2146,22 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123456",
+        deliveryMirror: { kind: "cron-direct-delivery-context" },
+      }),
+    );
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it("retains a stale one-shot transcript without delivery or a fallback summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
 
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.job.deleteAfterRun = true;
+    params.beforeSessionDelete = vi.fn();
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
       nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
     };
@@ -2148,6 +2179,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryState.status).toBe("not-delivered");
+    expect(state.deliveryState.delivered).toBe(false);
+    expect(state.deliveryState.error).toEqual(deliveryError);
+    expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
+    expect(params.beforeSessionDelete).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -3445,19 +3482,21 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:webchat:direct:owner",
-      expectedGeneration: {
-        sessionId: "source-session-id",
-        lifecycleRevision: "source-lifecycle-revision",
-      },
-      text: "durable WebChat completion",
-      idempotencyKey: "cron-current-completion:cron:test-job:1000",
-      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
-      config: params.cfgWithAgentDefaults,
-      signal: undefined,
-    });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:webchat:direct:owner",
+        expectedGeneration: {
+          sessionId: "source-session-id",
+          lifecycleRevision: "source-lifecycle-revision",
+        },
+        text: "durable WebChat completion",
+        idempotencyKey: "cron-current-completion:cron:test-job:1000",
+        provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+        config: params.cfgWithAgentDefaults,
+        signal: undefined,
+      }),
+    );
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -3496,6 +3535,76 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("commits a current-target completion on a webchat-only gateway with no configured channels", async () => {
+    // Regression: a Control UI dashboard session key does not contain
+    // "webchat", and a gateway without external channel plugins resolves no
+    // channel at all. The committed completion is the delivery; the run must
+    // not fail as a delivery-target error.
+    const params = makeBaseParams({
+      synthesizedText: "scheduled dashboard report",
+      sessionTarget: "current",
+      runStartedAt: 1_000,
+    });
+    const dashboardSessionKey = "agent:main:dashboard:c5557dcf-54bf-46b0-9bf2-a1f6ad1d0667";
+    (params.job as { sessionKey?: string }).sessionKey = dashboardSessionKey;
+    params.sourceSessionKey = dashboardSessionKey;
+    params.resolvedDelivery = {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error(
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. Use openclaw channels list --all to see available channel ids. Set delivery.channel explicitly or use a main session with a previous channel.",
+      ),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(state.deliveryError).toBeUndefined();
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: dashboardSessionKey,
+        text: "scheduled dashboard report",
+      }),
+    );
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it.each(["telegram", "unavailable-plugin"])(
+    "keeps a committed current-target run successful when its %s route fails to resolve",
+    async (channel) => {
+      const params = makeBaseParams({
+        synthesizedText: "committed but undeliverable externally",
+        sessionTarget: "current",
+        runStartedAt: 1_500,
+      });
+      params.resolvedDelivery = {
+        ok: false,
+        channel,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        mode: "implicit",
+        error: new Error("Target is required"),
+      };
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.result).toBeUndefined();
+      expect(state).toMatchObject({
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "Target is required",
+      });
+      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires the current-session commit in addition to one external delivery", async () => {
     const params = makeBaseParams({
       synthesizedText: "durable external completion",
@@ -3524,12 +3633,35 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.png" }),
+      expect.objectContaining({
+        text: "report.png",
+      }),
     );
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, {
       payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
     });
+  });
+
+  it("uses the finalized descendant payload set when a final reply supersedes media", async () => {
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue("Final descendant reply");
+
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 3_500 });
+    params.synthesizedText = "Example report";
+    params.summary = "Example report";
+    params.outputText = "Example report";
+    params.deliveryPayloads = [
+      { text: "Example report", mediaUrl: "/tmp/allowed-media/report.png" },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    const commitCall = vi.mocked(commitBackgroundResultToSessionMock).mock.calls.at(-1)?.[0];
+    expect(commitCall).toMatchObject({ text: "Final descendant reply" });
+    expect(state.deliveryPayloads).toEqual([{ text: "Final descendant reply" }]);
+    expectDeliveryCall(0, { payloads: [{ text: "Final descendant reply" }] });
   });
 
   it("does not mark or send a current-target delivery when its session commit fails", async () => {
@@ -4154,7 +4286,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           },
         ]);
         setActivePluginRegistry(registry);
-        harness.loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(registry);
+        harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
         harness.runEmbeddedAgentMock.mockResolvedValue({
           payloads: partialSend
             ? [{ text: "First payload." }, { text: "Second payload." }]

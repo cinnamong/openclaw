@@ -45,6 +45,20 @@ Look for:
 - `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
 - Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
+## Prepared model runtime publication timeout
+
+If startup reports `prepared model runtime publication (...) timed out`, the
+parenthesized detail identifies the pending stage and, during workspace
+preparation, its agent. Collect that error together with
+`openclaw gateway status --deep` and the startup logs.
+
+An `ambient credentials` stage can be waiting for a plugin's external login
+check even when the Gateway process uses little CPU. For Claude CLI, run
+`claude auth status --json` as the Gateway user with the same environment.
+Startup shares this check across workspaces; a large roster should not launch
+one native-login subprocess per agent. A successful `/health` response alone
+does not establish that model runtime publication completed.
+
 ## Split brain installs and newer config guard
 
 Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -77,7 +91,10 @@ openclaw config get meta.lastTouchedVersion
 </Steps>
 
 <Warning>
-For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
+For an intentional downgrade, follow [Downgrade](/install/updating#downgrade).
+Use the managed compatibility checks or restore the verified pre-update backup
+with its matching release. Do not remove `meta.lastTouchedVersion` or override
+the guard to run older code against migrated state.
 </Warning>
 
 ## Protocol mismatch after rollback
@@ -130,8 +147,8 @@ If the target is intentional, configure both the direct skill root and the allow
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
@@ -141,7 +158,8 @@ Then start a new session or wait for the skills watcher to refresh. Restart the 
 
 Do not use broad targets such as `~`, `/`, or a whole synced project folder. Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted `SKILL.md` directories.
 
-If Skill Workshop apply should also write through those trusted symlinked workspace skill paths, enable `skills.workshop.allowSymlinkTargetWrites`. Keep it disabled for read-only shared skill roots.
+Skill Workshop does not use these trusted discovery targets. It writes only
+inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 Related:
 
@@ -212,7 +230,7 @@ A successful minimal `curl` does not guarantee that real SDK-style requests will
 
 Related:
 
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
 - [Provider configuration](/providers)
 - [Logs](/logging)
 
@@ -247,7 +265,7 @@ Look for:
     - `messages[...].content: invalid type: sequence, expected a string`: backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
     - `validation.keys` or allowed message keys like `["role","content"]`: backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
     - `incomplete turn detected ... stopReason=stop payloads=0`: the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
-    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
+    - Direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `llama-server` builds behind `llmman`): OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
     - Failures shrink after disabling tools but do not disappear: tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
 
   </Accordion>
@@ -264,7 +282,22 @@ Related:
 
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
+
+## Agent run failed with a storage error
+
+An error naming the **Gateway state database** identifies a storage failure observed during the run. The chat banner, recorded assistant error, and `embedded_run_agent_end` log show the same diagnosis. Provider response bodies remain redacted.
+
+| SQLite message                                     | Next step                                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `database is locked` or `database table is locked` | Retry. If it repeats, check Gateway logs and concurrent storage maintenance.                                   |
+| `database or disk is full`                         | Free disk space on the Gateway host, then retry.                                                               |
+| `attempt to write a readonly database`             | Check the Gateway service user's storage permissions and filesystem mount mode.                                |
+| `disk I/O error`                                   | Check storage health and filesystem access before retrying. This message alone does not prove disk exhaustion. |
+
+A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
+
+Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## No replies
 
@@ -631,6 +664,12 @@ Related:
 
 Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
 
+Startup automatically migrates deterministic legacy keys in eligible single-file
+configs and continues only if the entire result validates, including plugins. It
+keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed
+configs, configs written by a newer version, and configs that still fail validation
+require operator repair. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale).
+
 ```bash
 openclaw logs --follow
 openclaw config file
@@ -650,10 +689,10 @@ Look for:
 <AccordionGroup>
   <Accordion title="What happened">
     - The config did not validate during startup, hot reload, or an OpenClaw-owned write.
-    - Gateway startup fails closed instead of rewriting `openclaw.json`.
+    - Gateway startup leaves `openclaw.json` unchanged and fails closed when safe legacy-key migration cannot produce a fully valid config.
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
-    - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
@@ -677,10 +716,13 @@ Look for:
 
   </Accordion>
   <Accordion title="Fix options">
+    An interactive startup can offer to run `openclaw doctor --fix` and retry once when automatic legacy-key migration is not enough. Non-interactive startup prints the repair command instead.
+
     1. Run `openclaw doctor --fix` to let doctor repair prefixed/clobbered config or restore last-known-good.
     2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
     3. Run `openclaw config validate` before restarting.
     4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+
   </Accordion>
 </AccordionGroup>
 
@@ -757,9 +799,9 @@ Related:
 If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
+openclaw automations status
+openclaw automations list
+openclaw automations runs <jobId> --limit 20
 openclaw system heartbeat last
 openclaw logs --follow
 ```

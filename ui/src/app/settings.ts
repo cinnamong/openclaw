@@ -1,15 +1,10 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  isPersistedSidebarRoute,
-  normalizeSidebarEntries,
-  serializeSidebarEntry,
-} from "../app-navigation.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -39,7 +34,7 @@ const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
-function settingsKeyForGateway(gatewayUrl: string): string {
+export function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
@@ -188,6 +183,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
+  chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
@@ -198,6 +194,7 @@ export const UI_APPEARANCE_DEFAULTS = {
 
 export type UiSettings = {
   gatewayUrl: string;
+  // In-memory Gateway secret; only token-mode hello may persist it.
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
@@ -211,6 +208,8 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
+  // Browser-local presentation preference; false preserves active-card auto-expand.
+  chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
@@ -226,7 +225,7 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
@@ -244,18 +243,7 @@ export type UiSettings = {
   openLinksInControlUiBrowser?: boolean;
 };
 
-type LastActiveSessionHost = {
-  settings: Pick<UiSettings, "lastActiveSessionKey">;
-  applySettings(patch: Partial<UiSettings>): void;
-};
-
-export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
-  const trimmed = next.trim();
-  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
-    return;
-  }
-  host.applySettings({ lastActiveSessionKey: trimmed });
-}
+export type UiPreferences = Omit<UiSettings, "token">;
 
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
@@ -297,7 +285,10 @@ export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   return {
     ...settings,
     gatewayUrl: effectiveUrl,
-    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
+    token: resolveGatewayCredentialsForUrlEdit(settings.gatewayUrl, effectiveUrl, {
+      token: settings.token,
+      password: "",
+    }).token,
     sessionKey: session.sessionKey,
     lastActiveSessionKey: session.lastActiveSessionKey,
   };
@@ -405,17 +396,21 @@ function loadSessionToken(gatewayUrl: string): string {
   }
 }
 
-export function resolveGatewayTokenForUrlEdit(
+export function resolveGatewayCredentialsForUrlEdit(
   currentGatewayUrl: string,
   nextGatewayUrl: string,
-  currentToken: string,
-): string {
-  if (gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl)) {
-    return currentToken;
-  }
-  // Gateway tokens stay session-scoped across endpoint edits.
-  // Durable settings may contain scrubbed legacy tokens, but must not restore them here.
-  return loadSessionToken(nextGatewayUrl);
+  credentials: { token: string; password: string },
+): { token: string; password: string } {
+  const sameTokenScope =
+    gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl);
+  const sameCredentialScope =
+    gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
+  return {
+    // Gateway tokens stay session-scoped across endpoint edits. Durable settings
+    // may contain scrubbed legacy tokens, but must not restore them here.
+    token: sameTokenScope ? credentials.token : loadSessionToken(nextGatewayUrl),
+    password: sameCredentialScope ? credentials.password : "",
+  };
 }
 
 export function persistSessionToken(gatewayUrl: string, token: string) {
@@ -440,20 +435,41 @@ export function persistSessionToken(gatewayUrl: string, token: string) {
 // Last write that never reached localStorage (private mode, quota, security
 // errors). Without it a setting picked on one page silently reverts when
 // another page re-reads storage in the same tab.
-let unpersistedSettings: UiSettings | null = null;
+let unpersistedSettings: UiPreferences | null = null;
 
-export function loadSettings(): UiSettings {
+type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
+let livePreferenceOwner: LivePreferenceOwner | null = null;
+
+/** Bind local writes to the mounted runtime, never its credentials. */
+export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
+  livePreferenceOwner = owner;
+  return () => {
+    if (livePreferenceOwner === owner) {
+      livePreferenceOwner = null;
+    }
+  };
+}
+
+// Another tab's persisted selector never retargets a mounted runtime's reads.
+export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): UiSettings {
+  const preferences = loadUiPreferences(gatewayUrl);
+  return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
+}
+
+export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
   const cached = unpersistedSettings;
-  if (cached) {
-    // Gateway auth stays session-scoped; re-derive it instead of caching it.
-    return { ...cached, token: loadSessionToken(cached.gatewayUrl) };
+  if (
+    cached &&
+    (!targetGatewayUrl ||
+      gatewayOriginScope(cached.gatewayUrl) === gatewayOriginScope(targetGatewayUrl))
+  ) {
+    return targetGatewayUrl ? { ...cached, gatewayUrl: targetGatewayUrl } : cached;
   }
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
   const storage = getSafeLocalStorage();
 
-  const defaults: UiSettings = {
-    gatewayUrl: defaultUrl,
-    token: loadSessionToken(defaultUrl),
+  const defaults: UiPreferences = {
+    gatewayUrl: targetGatewayUrl ?? defaultUrl,
     sessionKey: "main",
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
@@ -461,6 +477,7 @@ export function loadSettings(): UiSettings {
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
+    chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
@@ -473,18 +490,19 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    const selectedGatewayUrl = normalizeOptionalString(
-      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
-    );
+    const selectedGatewayUrl =
+      targetGatewayUrl ??
+      normalizeOptionalString(storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)));
     const source =
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
-      readSettingsForGateway(storage, defaultUrl);
+      (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
       return defaults;
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    const gatewayUrl =
+      targetGatewayUrl ?? (parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl);
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
@@ -498,22 +516,13 @@ export function loadSettings(): UiSettings {
       ? null
       : Array.isArray(parsedRecord.sidebarPinnedRoutes)
         ? normalizeSidebarEntries(
-            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
-              isPersistedSidebarRoute(value)
-                ? [
-                    serializeSidebarEntry({
-                      type: "route",
-                      route: value,
-                    }),
-                  ]
-                : [],
+            parsedRecord.sidebarPinnedRoutes.map((value) =>
+              typeof value === "string" ? `route:${value}` : value,
             ),
           )
         : null;
-    const settings: UiSettings = {
+    const settings: UiPreferences = {
       gatewayUrl,
-      // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
-      token: loadSessionToken(gatewayUrl),
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       selectedAgentId: scopedSessionSelection.selectedAgentId,
@@ -534,6 +543,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatPersistCommentary === "boolean"
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
+      chatCollapseTaskProgress:
+        typeof parsed.chatCollapseTaskProgress === "boolean"
+          ? parsed.chatCollapseTaskProgress
+          : defaults.chatCollapseTaskProgress,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
@@ -588,7 +601,10 @@ export function loadSettings(): UiSettings {
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
     if ("token" in parsed || migratedSidebarEntries !== null) {
-      persistSettings(settings, { selectGateway: true });
+      persistSettings(
+        { ...settings, token: loadSessionToken(gatewayUrl) },
+        { selectGateway: !targetGatewayUrl },
+      );
     }
     return settings;
   } catch {
@@ -614,7 +630,7 @@ export function patchSettings(
   patch: Partial<UiSettings>,
   options: { selectGateway?: boolean } = {},
 ): UiSettings {
-  const previous = loadSettings();
+  const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
   persistSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
@@ -637,7 +653,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
-  persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
@@ -682,6 +697,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
+    ...(next.chatCollapseTaskProgress === true ? { chatCollapseTaskProgress: true } : {}),
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),
@@ -740,7 +756,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
   };
   const serialized = JSON.stringify(persisted);
-  unpersistedSettings = next;
+  const { token: _token, ...preferences } = next;
+  unpersistedSettings = preferences;
   try {
     const { pageUrl } = deriveDefaultGatewayUrl();
     const selectionKey = currentGatewaySelectionKeyForPage(pageUrl);
@@ -756,5 +773,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied;
     // unpersistedSettings keeps this tab consistent until storage recovers
+  }
+  const owner = livePreferenceOwner;
+  if (owner && gatewayOriginScope(owner.gatewayUrl()) === scope) {
+    owner.refresh();
   }
 }
