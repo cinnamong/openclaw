@@ -188,7 +188,12 @@ export function runControlPlaneAdmissionCheck(
         "--owner",
         request.owner ?? "",
       ],
-      { env, timeout: timeoutMs, killSignal: "SIGKILL" },
+      {
+        env,
+        cwd: request.worktree,
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+      },
       (error) => {
         if (!error) {
           resolve({

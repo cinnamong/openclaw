@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -255,9 +255,12 @@ describe("runControlPlaneAdmissionCheck", () => {
       writeFileSync(scriptPath, "#!/bin/sh\nexit 0\n");
       chmodSync(scriptPath, 0o644);
 
-      const admission = await runControlPlaneAdmissionCheck(request, {
-        OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
-      });
+      const admission = await runControlPlaneAdmissionCheck(
+        { ...request, worktree: dir },
+        {
+          OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
+        },
+      );
       expect(admission).toEqual({
         admitted: false,
         reasonCode: "script_not_executable",
@@ -268,17 +271,23 @@ describe("runControlPlaneAdmissionCheck", () => {
     it("admits when the script exits 0", async () => {
       dir = mkdtempSync(join(tmpdir(), "cp-admission-"));
       const scriptPath = join(dir, "control-plane.sh");
-      writeFileSync(scriptPath, "#!/bin/sh\nexit 0\n");
+      const pwdLogPath = join(dir, "pwd.log");
+      writeFileSync(scriptPath, '#!/bin/sh\npwd -P > "$PWD_LOG"\n');
       chmodSync(scriptPath, 0o755);
 
-      const admission = await runControlPlaneAdmissionCheck(request, {
-        OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
-      });
+      const admission = await runControlPlaneAdmissionCheck(
+        { ...request, worktree: dir },
+        {
+          OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
+          PWD_LOG: pwdLogPath,
+        },
+      );
       expect(admission).toEqual({
         admitted: true,
         reasonCode: "admitted",
         detail: expect.any(String),
       });
+      expect(readFileSync(pwdLogPath, "utf8").trim()).toBe(realpathSync(dir));
     });
 
     it("denies (fails closed) when the script exits non-zero", async () => {
@@ -287,9 +296,12 @@ describe("runControlPlaneAdmissionCheck", () => {
       writeFileSync(scriptPath, "#!/bin/sh\nexit 3\n");
       chmodSync(scriptPath, 0o755);
 
-      const admission = await runControlPlaneAdmissionCheck(request, {
-        OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
-      });
+      const admission = await runControlPlaneAdmissionCheck(
+        { ...request, worktree: dir },
+        {
+          OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
+        },
+      );
       expect(admission).toEqual({
         admitted: false,
         reasonCode: "denied",
@@ -306,10 +318,13 @@ describe("runControlPlaneAdmissionCheck", () => {
       chmodSync(scriptPath, 0o755);
 
       const startedAt = Date.now();
-      const admission = await runControlPlaneAdmissionCheck(request, {
-        OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
-        OPENCLAW_CONTROL_PLANE_TIMEOUT_MS: "300",
-      });
+      const admission = await runControlPlaneAdmissionCheck(
+        { ...request, worktree: dir },
+        {
+          OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
+          OPENCLAW_CONTROL_PLANE_TIMEOUT_MS: "300",
+        },
+      );
       const elapsedMs = Date.now() - startedAt;
 
       expect(admission).toEqual({
@@ -328,10 +343,13 @@ describe("runControlPlaneAdmissionCheck", () => {
       chmodSync(scriptPath, 0o755);
 
       const startedAt = Date.now();
-      const admission = await runControlPlaneAdmissionCheck(request, {
-        OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
-        OPENCLAW_CONTROL_PLANE_TIMEOUT_MS: "200",
-      });
+      const admission = await runControlPlaneAdmissionCheck(
+        { ...request, worktree: dir },
+        {
+          OPENCLAW_CONTROL_PLANE_SCRIPT: scriptPath,
+          OPENCLAW_CONTROL_PLANE_TIMEOUT_MS: "200",
+        },
+      );
       const elapsedMs = Date.now() - startedAt;
 
       expect(admission.reasonCode).toBe("timeout");

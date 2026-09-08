@@ -38,9 +38,13 @@ describe.skipIf(process.platform === "win32")(
       };
     }
 
+    function config() {
+      return { agents: { list: [{ id: "test-agent", workspace: logDir }] } } as never;
+    }
+
     it("flag ON + go invokes the real script and admits Slack ingress", async () => {
       await expect(
-        admitSlackIngressSpawnOrThrow({ cfg: {} as never, route }, { env: env("go") }),
+        admitSlackIngressSpawnOrThrow({ cfg: config(), route }, { env: env("go") }),
       ).resolves.toBeUndefined();
 
       const logged = readFileSync(callLogPath, "utf8");
@@ -50,7 +54,7 @@ describe.skipIf(process.platform === "win32")(
 
     it("flag ON + no-go invokes the real script and rejects Slack ingress", async () => {
       await expect(
-        admitSlackIngressSpawnOrThrow({ cfg: {} as never, route }, { env: env("no-go") }),
+        admitSlackIngressSpawnOrThrow({ cfg: config(), route }, { env: env("no-go") }),
       ).rejects.toBeInstanceOf(SlackIngressSpawnAdmissionDeclinedError);
 
       expect(readFileSync(callLogPath, "utf8")).toContain(route.sessionKey);
@@ -58,7 +62,7 @@ describe.skipIf(process.platform === "win32")(
 
     it("flag OFF admits Slack ingress without touching the script", async () => {
       await expect(
-        admitSlackIngressSpawnOrThrow({ cfg: {} as never, route }, { env: env("no-go", false) }),
+        admitSlackIngressSpawnOrThrow({ cfg: config(), route }, { env: env("no-go", false) }),
       ).resolves.toBeUndefined();
 
       expect(existsSync(callLogPath)).toBe(false);
