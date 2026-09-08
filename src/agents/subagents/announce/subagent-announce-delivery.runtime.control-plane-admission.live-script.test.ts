@@ -58,7 +58,7 @@ describe.skipIf(process.platform === "win32")(
       const dispatchGatewayMethodInProcess = vi.fn().mockResolvedValue({ ok: true });
       setSubagentAnnounceDeliveryDepsForTest({
         dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "test-agent", workspace: logDir }] } }),
       });
 
       await expect(
@@ -78,7 +78,7 @@ describe.skipIf(process.platform === "win32")(
       const dispatchGatewayMethodInProcess = vi.fn().mockResolvedValue({ ok: true });
       setSubagentAnnounceDeliveryDepsForTest({
         dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => ({ agents: { list: [{ id: "test-agent", workspace: logDir }] } }),
       });
 
       await expect(
